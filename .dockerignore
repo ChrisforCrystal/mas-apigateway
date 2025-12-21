@@ -1,0 +1,30 @@
+# Git
+.git
+.gitignore
+.dockerignore
+
+# Build Artifacts - Rust
+**/target/
+**/*.rs.bk
+
+# Build Artifacts - Go
+**/bin/
+**/pkg/
+**/vendor/
+**/*.test
+**/*.out
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.swp
+*.iml
+.DS_Store
+
+# Documentation & Specs (Optional: usually keep specs in build context if needed for docs, but exclude for raw binary builds)
+# keeping them for now as they are small.
+
+# Temporary files
+tmp/
+*.log
+.gemini/

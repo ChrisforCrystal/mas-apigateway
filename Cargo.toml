@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "data-plane",
+    "cli",
+]
+resolver = "2"

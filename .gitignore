@@ -1,0 +1,36 @@
+# Rust
+/target
+/**/target
+**/*.rs.bk
+*.rlib
+*.prof*
+
+# Go
+/bin
+/pkg
+/vendor
+*.exe
+*.test
+*.out
+go.sum
+
+# Proto
+*.pb.go
+*.doc.json
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.iml
+.DS_Store
+
+# Plugins
+/plugins/*.wasm
+
+# Deploy
+/deploy/charts/*.tgz
+
+# System
+.gemini/
+tmp/
