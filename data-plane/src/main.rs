@@ -1,3 +1,4 @@
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use pingora::proxy::ProxyHttp;
 use pingora::proxy::Session;
@@ -5,12 +6,21 @@ use pingora::proxy::http_proxy_service;
 use pingora::server::Server;
 use pingora::server::configuration::Opt;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 mod client;
 use client::AgwClient;
+mod wasm;
+use wasm::WasmRuntime;
+// We need to import the proto types. They are re-exported in client usually or accessible.
+// client.rs exposes Node. We need ConfigSnapshot too.
+// Let's rely on client code to return us something or expose it.
+// client.rs: pub mod agw { ... }
+// We can use client::agw::v1::ConfigSnapshot;
 
-pub struct AgwProxy;
+pub struct AgwProxy {
+    config: Arc<ArcSwap<client::agw::v1::ConfigSnapshot>>,
+    wasm: WasmRuntime,
+}
 
 #[async_trait]
 impl ProxyHttp for AgwProxy {
@@ -19,66 +29,254 @@ impl ProxyHttp for AgwProxy {
         ()
     }
 
+    async fn request_filter(
+        &self,
+        session: &mut Session,
+        _ctx: &mut Self::CTX,
+    ) -> pingora::Result<bool> {
+        // Dynamic Routing Logic
+        let config = self.config.load();
+        let path = session.req_header().uri.path();
+        let _host = session.req_header().uri.host().unwrap_or("");
+
+        // Simple loop matching (Enhancement: use Trie or HashMpa)
+        for route in &config.routes {
+            // Prefix match
+            if path.starts_with(&route.path_prefix) {
+                // Check Plugins
+                if !route.plugins.is_empty() {
+                    // Extract Headers for Wasm
+                    let mut headers = std::collections::HashMap::new();
+                    for (name, value) in session.req_header().headers.iter() {
+                        if let Ok(v_str) = value.to_str() {
+                            headers.insert(name.to_string(), v_str.to_string());
+                        }
+                    }
+
+                    for plugin in &route.plugins {
+                        match self.wasm.run_plugin(&plugin.wasm_path, headers.clone()) {
+                            Ok(allow) => {
+                                if !allow {
+                                    // Plugin Denied
+                                    let _ = session.respond_error(403).await;
+                                    return Ok(true); // Handled
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Wasm Plugin Error [{}]: {}", plugin.name, e);
+                                let _ = session.respond_error(500).await;
+                                return Ok(true);
+                            }
+                        }
+                    }
+                }
+                // Store selected cluster in session state (or just header for now)
+                // We need to pass state to upstream_peer.
+                // Pingora allows passing state via CTX or modifying header.
+                // Let's attach a custom header "x-agw-cluster" for internal use?
+                // Or better, ProxyHttp doesn't easily share state between request_filter and upstream_peer unless it's in CTX.
+                // But CTX is () right now.
+                // Let's implement simple round-robin or first endpoint of the cluster here?
+                // Wait, upstream_peer needs to return a Peer.
+                // We should resolve cluster here and put it in CTX.
+                return Ok(false); // Continue to upstream_peer
+            }
+        }
+
+        // No match? 404
+        // Pingora doesn't easily return 404 from here without sending response manually.
+        // We can return true (handled) after sending error.
+        let _ = session.respond_error(404).await;
+        Ok(true)
+    }
+
     async fn upstream_peer(
         &self,
-        _session: &mut Session,
+        session: &mut Session,
         _ctx: &mut Self::CTX,
     ) -> pingora::Result<Box<pingora::upstreams::peer::HttpPeer>> {
-        let addr = ("1.1.1.1", 80);
-        let peer = Box::new(pingora::upstreams::peer::HttpPeer::new(
-            addr,
-            false,
-            "one.one.one.one".to_string(),
-        ));
-        Ok(peer)
+        // Re-match or use CTX. For now re-match (inefficient but safe).
+        let config = self.config.load();
+        let path = session.req_header().uri.path();
+
+        let mut cluster_name = "";
+        for route in &config.routes {
+            if path.starts_with(&route.path_prefix) {
+                cluster_name = &route.cluster_id;
+                break;
+            }
+        }
+
+        if cluster_name.is_empty() {
+            return Err(pingora::Error::create(
+                pingora::ErrorType::HTTPStatus(502),
+                pingora::ErrorSource::Upstream,
+                Some("no route match".into()),
+                None,
+            ));
+        }
+
+        // Find cluster
+        let cluster = config.clusters.iter().find(|c| c.name == cluster_name);
+        if let Some(c) = cluster {
+            if let Some(endpoint) = c.endpoints.first() {
+                // Simple first endpoint
+                let addr = (endpoint.address.as_str(), endpoint.port as u16);
+                // Using IP address needs parsing if it's string.
+                // Pingora HttpPeer takes a SocketAddr or string?
+                // It takes logic.
+                // HttpPeer::new(address, tls, sni)
+                // address can be ToSocketAddrs? No, it's (A, u16).
+                // We need to support DNS? Assuming IP now for MVP.
+                let peer = Box::new(pingora::upstreams::peer::HttpPeer::new(
+                    addr,
+                    false,
+                    "".to_string(),
+                ));
+                return Ok(peer);
+            }
+        }
+
+        Err(pingora::Error::create(
+            pingora::ErrorType::HTTPStatus(503),
+            pingora::ErrorSource::Upstream,
+            Some("no healthy endpoint".into()),
+            None,
+        ))
     }
 }
 
 fn main() {
+    env_logger::init();
     let mut server = Server::new(Some(Opt::default())).unwrap();
     server.bootstrap();
 
-    // US3: Start gRPC Client in background
-    // pingora's run_forever blocks, so we spawn before.
-    // However, pingora uses its own runtime? No, we can use tokio::spawn if we are in a runtime.
-    // pingora `main` usually sets up runtime?
-    // Server::bootstrap initializes stuff.
-    // We can spawn a separate thread or use server.run_forever (which runs the event loop).
-    // Better: spawn a background task?
-    // Pingora services can be "background services".
-    // For MVP, let's just spawn a tokio thread if we can, or just print log in main for now?
-    // Wait, we need to run the client.
-    // We can use `tokio::runtime::Runtime` or just rely on Pingora's runtime if we can hook into it.
-    // Pingora supports `add_service`. We can wrap our client as a service?
-    // Let's keep it simple: spawn a tokio task inside `main` (but main isn't async).
-    // We can use a separate thread for the client loop.
+    // Create Tokio Runtime for client
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
-    std::thread::spawn(|| {
+    // 1. Fetch Initial Config (Blocking)
+    let cp_url = std::env::var("AGW_CONTROL_PLANE_URL")
+        .unwrap_or_else(|_| "http://localhost:18000".to_string());
+    println!(
+        "Connecting to Control Plane at {} to fetch initial config...",
+        cp_url
+    );
+
+    let initial_config = rt.block_on(async {
+        loop {
+            match AgwClient::connect(cp_url.clone(), "node-1".to_string()).await {
+                Ok(mut client) => {
+                    let request = tonic::Request::new(client::Node {
+                        id: "node-1".to_string(),
+                        region: "us-east-1".to_string(),
+                        version: "0.1.0".to_string(),
+                    });
+                    match client.client.stream_config(request).await {
+                        Ok(resp) => {
+                            let mut stream = resp.into_inner();
+                            if let Ok(Some(snapshot)) = stream.message().await {
+                                return snapshot;
+                            }
+                        }
+                        Err(e) => eprintln!("Stream handshake failed: {}", e),
+                    }
+                }
+                Err(e) => eprintln!("Connection failed: {}", e),
+            }
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        }
+    });
+
+    println!(
+        "Received initial config version: {}",
+        initial_config.version_id
+    );
+
+    // Shared Config State
+    let config_store = Arc::new(ArcSwap::from_pointee(initial_config.clone()));
+
+    let wasm_runtime = WasmRuntime::new();
+    let proxy_service = AgwProxy {
+        config: config_store.clone(),
+        wasm: wasm_runtime,
+    };
+
+    let mut my_proxy = http_proxy_service(&server.configuration, proxy_service);
+
+    // 2. Setup Listeners
+    if initial_config.listeners.is_empty() {
+        // Fallback for safety/testing if no listeners defined
+        my_proxy.add_tcp("0.0.0.0:6188");
+    }
+
+    for listener in &initial_config.listeners {
+        let addr = format!("{}:{}", listener.address, listener.port);
+        if let Some(tls) = &listener.tls {
+            // Write cert/key to temp files
+            let cert_path = format!("/tmp/{}_cert.pem", listener.name);
+            let key_path = format!("/tmp/{}_key.pem", listener.name);
+
+            if let Err(e) = std::fs::write(&cert_path, &tls.cert_pem) {
+                eprintln!("Failed to write cert for {}: {}", listener.name, e);
+                continue;
+            }
+            if let Err(e) = std::fs::write(&key_path, &tls.key_pem) {
+                eprintln!("Failed to write key for {}: {}", listener.name, e);
+                continue;
+            }
+
+            println!(
+                "Adding TLS Listener: {} at {}. Cert: {} bytes, Key: {} bytes (Using MANUAL paths for debug)",
+                listener.name,
+                addr,
+                tls.cert_pem.len(),
+                tls.key_pem.len()
+            );
+
+            if let Err(e) = my_proxy.add_tls(&addr, &cert_path, &key_path) {
+                eprintln!("Failed to add TLS listener {}: {}", listener.name, e);
+            }
+        } else {
+            println!("Adding TCP Listener: {} at {}", listener.name, addr);
+            my_proxy.add_tcp(&addr);
+        }
+    }
+
+    // 3. Spawn Background Update Task
+    let cp_url_bg = cp_url.clone();
+    std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            // Retry loop
             loop {
-                match AgwClient::connect("http://localhost:18000".to_string(), "node-1".to_string())
-                    .await
-                {
+                // Determine current version to avoid re-fetching same?
+                // For now, simple stream update
+                match AgwClient::connect(cp_url_bg.clone(), "node-1".to_string()).await {
                     Ok(mut client) => {
-                        if let Err(e) = client.start_stream().await {
-                            eprintln!("Stream error: {}", e);
+                        let request = tonic::Request::new(client::Node {
+                            id: "node-1".to_string(),
+                            region: "us-east-1".to_string(),
+                            version: "0.1.0".to_string(),
+                        });
+                        match client.client.stream_config(request).await {
+                            Ok(resp) => {
+                                let mut stream = resp.into_inner();
+                                println!("Connected to CP stream...");
+                                while let Ok(Some(snapshot)) = stream.message().await {
+                                    println!("Applied Config Version: {}", snapshot.version_id);
+                                    config_store.store(Arc::new(snapshot));
+                                    // Note: Listeners update required restart in this MVP
+                                }
+                            }
+                            Err(e) => eprintln!("Stream failed: {}", e),
                         }
                     }
-                    Err(e) => {
-                        eprintln!("Connection failed: {}", e);
-                    }
+                    Err(e) => eprintln!("Reconnect failed: {}", e),
                 }
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             }
         });
     });
 
-    let mut my_proxy = http_proxy_service(&server.configuration, AgwProxy);
-    my_proxy.add_tcp("0.0.0.0:6188");
-
-    println!("AGW Data Plane starting on 0.0.0.0:6188");
     server.add_service(my_proxy);
     server.run_forever();
 }

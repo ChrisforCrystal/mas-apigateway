@@ -1,0 +1,22 @@
+version: "1.0"
+listeners:
+  - name: "http-listener"
+    address: "0.0.0.0"
+    port: 6188
+    routes:
+      - match: "/new"
+        cluster: "my-local-cluster"
+  - name: "https-listener"
+    address: "0.0.0.0"
+    port: 6443
+    tls:
+      secret_name: "my-tls-secret"
+    routes:
+      - match: "/secure"
+        cluster: "my-local-cluster"
+
+clusters:
+  - name: "upstream-1"
+    endpoints:
+      - address: "1.1.1.1"
+        port: 80

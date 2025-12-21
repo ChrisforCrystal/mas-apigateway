@@ -1,14 +1,22 @@
-use agw::Node;
-use agw::agw_service_client::AgwServiceClient;
 use tonic::transport::Channel;
 
 pub mod agw {
-    tonic::include_proto!("agw.v1");
+    pub mod config {
+        pub mod v1 {
+            tonic::include_proto!("agw.config.v1");
+        }
+    }
+    pub mod v1 {
+        tonic::include_proto!("agw.v1");
+    }
 }
+// Re-export specific types if needed for convenience
+pub use agw::v1::Node;
+pub use agw::v1::agw_service_client::AgwServiceClient;
 
 pub struct AgwClient {
-    client: AgwServiceClient<Channel>,
-    node_id: String,
+    pub client: AgwServiceClient<Channel>,
+    pub node_id: String,
 }
 
 impl AgwClient {

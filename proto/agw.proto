@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package agw.v1;
 
-option go_package = "github.com/masallsome/masapigateway/proto/agw/v1;agwv1";
+option go_package = "github.com/masallsome/masapigateway/control-plane/pkg/proto;agwv1";
 
 // AgwService defines the communication between Data Plane and Control Plane.
 service AgwService {
@@ -18,8 +18,12 @@ message Node {
   string version = 3;  // Binary version
 }
 
+import "config.proto";
+
 // ConfigSnapshot contains the full configuration state for the Data Plane.
 message ConfigSnapshot {
   string version_id = 1; // Opaque version string for tracking
-  // TODO: Add actual config fields (Routes, Clusters, etc.) later
+  repeated agw.config.v1.Listener listeners = 2;
+  repeated agw.config.v1.Cluster clusters = 3;
+  repeated agw.config.v1.Route routes = 4;
 }

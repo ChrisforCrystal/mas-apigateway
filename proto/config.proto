@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package agw.config.v1;
+
+option go_package = "github.com/masallsome/masapigateway/control-plane/pkg/proto;agwv1";
+
+// Listener defines a network listener (e.g., waiting for traffic on a port).
+message Listener {
+  string name = 1;
+  string address = 2; // e.g., "0.0.0.0"
+  uint32 port = 3;    // e.g., 6188
+  TlsConfig tls = 4;
+}
+
+message TlsConfig {
+  bytes cert_pem = 1;
+  bytes key_pem = 2;
+  string secret_name = 3; // used by CP to loading cert/key
+}
+
+// Route defines how to match a request and where to send it.
+message Route {
+  string path_prefix = 1;
+  string cluster_id = 2; // References a Cluster.name
+  map<string, string> metadata = 3;
+  repeated Plugin plugins = 4;
+}
+
+message Plugin {
+  string name = 1;
+  string wasm_path = 2;
+  map<string, string> config = 3;
+}
+
+message Cluster {
+  string name = 1; // e.g., "user-service" or "k8s/default/user"
+  repeated Endpoint endpoints = 2;
+}
+
+message Endpoint {
+  string address = 1; // IP or Hostname
+  uint32 port = 2;
+  map<string, string> metadata = 3;
+}

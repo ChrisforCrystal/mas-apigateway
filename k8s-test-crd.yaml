@@ -1,0 +1,15 @@
+apiVersion: agw.masallsome.io/v1
+kind: GatewayRoute
+metadata:
+  name: dynamic-route-demo
+  namespace: default
+spec:
+  match: "/dynamic"
+  backend:
+    service_name: "my-nginx"
+    port: 80
+  plugins:
+    - name: "header-check"
+      wasm_path: "/Users/jiwn2/dev/masallsome/masapigateway/plugins/deny-all/target/wasm32-unknown-unknown/release/deny_all.wasm"
+      config:
+        block_val: "curl"
