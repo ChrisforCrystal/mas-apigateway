@@ -25,7 +25,11 @@ func main() {
 	}
 	
 	// Initialize Config Watcher
-	watcher, err := serverConfig.NewWatcher("config.yaml")
+	configPath := os.Getenv("AGW_CONFIG_PATH")
+	if configPath == "" {
+		configPath = "config.yaml"
+	}
+	watcher, err := serverConfig.NewWatcher(configPath)
 	if err != nil {
 		log.Printf("Warning: failed to create watcher: %v", err)
 	}

@@ -16,7 +16,16 @@
 
 ## 快速开始
 
-详见 [验证指南](docs/VERIFICATION.md)，包含本地运行和 Docker 验证的步骤。
+详见 [验证指南](docs/VERIFICATION.md)。
+
+### 本地快速运行 (Local)
+
+需要两个终端窗口：
+
+1. **Control Plane**: `cd control-plane && go run cmd/server/main.go`
+2. **Data Plane**: `cd data-plane && AGW_CONTROL_PLANE_URL=http://localhost:18000 cargo run`
+
+然后访问: `curl http://localhost:6188/new`
 
 ## 项目结构
 

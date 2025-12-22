@@ -1,4 +1,4 @@
-FROM rust:1.83-bookworm as builder
+FROM rust:bookworm as builder
 
 WORKDIR /usr/src/app
 
@@ -7,13 +7,18 @@ RUN apt-get update && apt-get install -y protobuf-compiler cmake && rm -rf /var/
 
 # Copy workspace files
 # We need proto folder which is outside data-plane
-COPY proto /usr/src/proto
+COPY proto /usr/src/app/proto
 
-# Copy data-plane
-COPY data-plane /usr/src/app/data-plane
-
-# Build
+# Optimization: Cache dependencies
 WORKDIR /usr/src/app/data-plane
+COPY data-plane/Cargo.toml data-plane/build.rs ./
+RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN cargo build --release
+
+# Build actual app
+COPY data-plane/src ./src
+# Update timestamp to force rebuild of main.rs
+RUN touch src/main.rs
 RUN cargo build --release
 
 # Runtime image

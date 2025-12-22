@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mas-agw-control-plane
+  namespace: default
+  labels:
+    app: mas-agw-control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mas-agw-control-plane
+  template:
+    metadata:
+      labels:
+        app: mas-agw-control-plane
+    spec:
+      serviceAccountName: mas-agw-control-plane
+      containers:
+        - name: control-plane
+          image: masapigateway/control-plane:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 18000
+              name: grpc
+          env:
+            - name: AGW_CONFIG_PATH
+              value: "/etc/agw/config.yaml"
+          volumeMounts:
+            - name: config-volume
+              mountPath: "/etc/agw"
+      volumes:
+        - name: config-volume
+          configMap:
+            name: mas-agw-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mas-agw-control-plane
+  namespace: default
+spec:
+  selector:
+    app: mas-agw-control-plane
+  ports:
+    - port: 18000
+      targetPort: 18000
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mas-agw-data-plane
+  namespace: default
+  labels:
+    app: mas-agw-data-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mas-agw-data-plane
+  template:
+    metadata:
+      labels:
+        app: mas-agw-data-plane
+    spec:
+      containers:
+        - name: data-plane
+          image: masapigateway/data-plane:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: AGW_CONTROL_PLANE_URL
+              value: "http://mas-agw-control-plane:18000"
+            - name: RUST_LOG
+              value: "debug"
+          ports:
+            - containerPort: 6188
+              name: http
+            - containerPort: 6443
+              name: https
+          volumeMounts:
+            - name: plugin-volume
+              mountPath: "/etc/agw/plugins"
+      volumes:
+        - name: plugin-volume
+          configMap:
+            name: mas-agw-plugins
+            optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mas-agw-data-plane
+  namespace: default
+spec:
+  selector:
+    app: mas-agw-data-plane
+  ports:
+    - port: 80
+      targetPort: 6188
+      name: http
+    - port: 443
+      targetPort: 6443
+      name: https
+  type: LoadBalancer

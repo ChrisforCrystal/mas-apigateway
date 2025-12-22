@@ -175,7 +175,11 @@ fn main() {
                         Ok(resp) => {
                             let mut stream = resp.into_inner();
                             if let Ok(Some(snapshot)) = stream.message().await {
-                                return snapshot;
+                                if snapshot.listeners.is_empty() {
+                                    eprintln!("Received config, but it has NO listeners (likely Control Plane is not ready). Retrying...");
+                                } else {
+                                    return snapshot;
+                                }
                             }
                         }
                         Err(e) => eprintln!("Stream handshake failed: {}", e),

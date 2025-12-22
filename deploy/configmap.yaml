@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mas-agw-config
+  namespace: default
+data:
+  config.yaml: |
+    version: "1.0"
+    listeners:
+      - name: "http-listener"
+        address: "0.0.0.0"
+        port: 6188
+      - name: "https-listener"
+        address: "0.0.0.0"
+        port: 6443
+        tls:
+          secret_name: "my-tls-secret"
+    clusters:
+      # Default empty clusters, will be populated by CRDs or dynamic updates

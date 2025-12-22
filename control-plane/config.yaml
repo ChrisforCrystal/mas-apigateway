@@ -6,6 +6,9 @@ listeners:
     routes:
       - match: "/new"
         cluster: "my-local-cluster"
+        # plugins:
+        #   - name: "deny-curl"
+        #     wasm_path: "/Create/Absolute/Path/To/plugins/deny-all/target/wasm32-unknown-unknown/release/deny_all.wasm"
   - name: "https-listener"
     address: "0.0.0.0"
     port: 6443
@@ -20,3 +23,7 @@ clusters:
     endpoints:
       - address: "1.1.1.1"
         port: 80
+  - name: "my-local-cluster"
+    endpoints:
+      - address: "host.docker.internal"
+        port: 9000
