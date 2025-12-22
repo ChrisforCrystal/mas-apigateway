@@ -8,21 +8,25 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 )
 
-// Registry holds the current state of discovered K8s services.
-// It maps Service keys (namespace/name) to Cluster snapshots.
+// Registry 保存了已发现的 K8s 服务的当前状态。
+// 它将 Service 键 (namespace/name) 映射到 Cluster 快照。
+// Registry 用于维护从 Kubernetes 集群中同步过来的服务、路由和密钥信息，
+// 并提供给控制平面主循环使用，以便生成最新的配置推送给数据平面。
 type Registry struct {
 	mu       sync.RWMutex
-	clusters map[string]*agwv1.Cluster
-	routes   []*agwv1.Route // Routes from CRD/Ingress
-	secrets  map[string]*TlsSecret
-	updates  chan struct{}  // Signal channel
+	clusters map[string]*agwv1.Cluster // 存储服务集群信息，key 为 "namespace/serviceName"
+	routes   []*agwv1.Route            // 存储从 CRD 或 Ingress 转换而来的路由规则
+	secrets  map[string]*TlsSecret     // 存储 TLS 证书和密钥，key 为 Secret 名称
+	updates  chan struct{}             // 信号通道，用于通知 Registry 状态发生变化
 }
 
+// TlsSecret 封装了 TLS 证书和私钥的字节内容。
 type TlsSecret struct {
 	Cert []byte
 	Key  []byte
 }
 
+// NewRegistry 创建并初始化一个新的 Registry 实例。
 func NewRegistry() *Registry {
 	return &Registry{
 		clusters: make(map[string]*agwv1.Cluster),
@@ -32,12 +36,15 @@ func NewRegistry() *Registry {
 	}
 }
 
-// Updates returns a channel that signals when registry changes.
-// It uses a non-blocking send with 1-buffer to function as a "dirty" signal.
+// Updates 返回一个通道，当 Registry 发生变化时会收到信号。
+// 它使用带 1 个缓冲区的非阻塞发送，起到 "脏位 (dirty bit)" 信号的作用。
+// 调用者可以通过监听此通道来获知需要重新生成和推送配置的时机。
 func (r *Registry) Updates() <-chan struct{} {
 	return r.updates
 }
 
+// notify 向 updates 通道发送信号，通知观察者 Registry 已更新。
+// 如果通道已满（已有待处理信号），则丢弃本次信号，避免阻塞。
 func (r *Registry) notify() {
 	select {
 	case r.updates <- struct{}{}:
@@ -45,22 +52,23 @@ func (r *Registry) notify() {
 	}
 }
 
-// UpdateEndpointSlice processes an EndpointSlice and updates the corresponding Cluster.
-// For MVP, we assume 1 Service = 1 Cluster.
-// naming convention: "k8s/{namespace}/{service_name}"
+// UpdateEndpointSlice 处理 EndpointSlice 并更新相应的 Cluster 信息。
+// 对于 MVP 版本，我们假设 1 个 Service 对应 1 个 Cluster。
+// 命名约定: "k8s/{namespace}/{service_name}"
 func (r *Registry) UpdateEndpointSlice(slice *discoveryv1.EndpointSlice, cluster *agwv1.Cluster) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	
 	key := fmt.Sprintf("%s/%s", slice.Namespace, slice.Labels["kubernetes.io/service-name"])
-	// In a real implementation with multiple slices per service, we need to merge them.
-	// For MVP, we just overwrite/upsert based on service name (simplified).
-	// Ideally we map Slice -> Endpoints and aggregate.
+	// 在真实的实现中，一个 Service 可能对应多个 EndpointSlice，我们需要合并它们。
+	// 对于 MVP，我们简化处理，直接基于服务名覆盖/更新。
+	// 理想情况下，应该映射 Slice -> Endpoints 并进行聚合。
 	
 	r.clusters[key] = cluster
 	r.notify()
 }
 
+// DeleteService 从 Registry 中删除指定的服务。
 func (r *Registry) DeleteService(namespace, name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -70,7 +78,8 @@ func (r *Registry) DeleteService(namespace, name string) {
 	r.notify()
 }
 
-// ListClusters returns all discovered clusters.
+// ListClusters 返回所有已发现的 Cluster 列表。
+// 返回的是 Cluster 指针的切片。
 func (r *Registry) ListClusters() []*agwv1.Cluster {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -81,6 +90,8 @@ func (r *Registry) ListClusters() []*agwv1.Cluster {
 	return list
 }
 
+// StoreCRDRoutes 更新 Registry 中的路由规则。
+// 这些路由通常来自自定义资源 (CRD) 或 Ingress 资源的转换结果。
 func (r *Registry) StoreCRDRoutes(routes []*agwv1.Route) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -88,6 +99,8 @@ func (r *Registry) StoreCRDRoutes(routes []*agwv1.Route) {
 	r.notify()
 }
 
+// ListRoutes 返回当前存储的所有路由规则。
+// 为了并发安全，返回的是路由切片的副本。
 func (r *Registry) ListRoutes() []*agwv1.Route {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -97,6 +110,7 @@ func (r *Registry) ListRoutes() []*agwv1.Route {
 	return list
 }
 
+// UpdateSecret 更新或添加一个 TLS Secret。
 func (r *Registry) UpdateSecret(name string, cert, key []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -108,6 +122,7 @@ func (r *Registry) UpdateSecret(name string, cert, key []byte) {
 	r.notify()
 }
 
+// DeleteSecret 从 Registry 中删除指定的 TLS Secret。
 func (r *Registry) DeleteSecret(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -116,6 +131,8 @@ func (r *Registry) DeleteSecret(name string) {
 	r.notify()
 }
 
+// GetSecret 根据名称获取 TLS Secret。
+// 如果未找到，返回 nil。
 func (r *Registry) GetSecret(name string) *TlsSecret {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
