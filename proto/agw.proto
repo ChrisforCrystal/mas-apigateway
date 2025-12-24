@@ -2,28 +2,35 @@ syntax = "proto3";
 
 package agw.v1;
 
+// 定义生成的 Go 代码的包路径和别名 (agwv1)
 option go_package = "github.com/masallsome/masapigateway/control-plane/pkg/proto;agwv1";
 
-// AgwService defines the communication between Data Plane and Control Plane.
+// AgwService 定义了数据平面 (Data Plane) 和控制平面 (Control Plane) 之间的通信接口。
+// 这采用的是 "xDS" 风格的协议：数据平面主动连接控制平面，建立长连接以接收配置更新。
 service AgwService {
-  // StreamConfig establishes a persistent stream from Data Plane to Control Plane.
-  // The Data Plane sends its Node identity, and the Control Plane pushes ConfigSnapshots.
+  // StreamConfig 建立一个从控制平面到数据平面的持久化配置流。
+  // 1. 请求 (Node): 数据平面启动时发送自己的身份信息（节点 ID、版本等）。
+  // 2. 响应流 (stream ConfigSnapshot): 控制平面通过这个流，源源不断地把最新的配置快照推送给数据平面。
   rpc StreamConfig(Node) returns (stream ConfigSnapshot);
 }
 
-// Node identifies a specific Data Plane instance.
+// Node 用于标识一个具体的数据平面实例。
+// 当数据平面启动时，它会将这些信息发送给控制平面进行注册。
 message Node {
-  string id = 1;       // Unique ID of the node
-  string region = 2;   // Deployment region
-  string version = 3;  // Binary version
+  string id = 1;       // 节点的唯一标识 (UUID)
+  string region = 2;   // 部署区域 (例如 "us-west-1", "cn-hangzhou")，可用于做地域感知的配置推送
+  string version = 3;  // 数据平面的二进制版本号
 }
+
+// 引用 config.proto 中定义的具体配置结构 (Listener, Route, Cluster)
 
 import "config.proto";
 
-// ConfigSnapshot contains the full configuration state for the Data Plane.
+// ConfigSnapshot 包含数据平面所需的所有配置信息的全量快照。
+// 每次发生变更时，控制平面都会推送一个全新的 Snapshot。
 message ConfigSnapshot {
-  string version_id = 1; // Opaque version string for tracking
-  repeated agw.config.v1.Listener listeners = 2;
-  repeated agw.config.v1.Cluster clusters = 3;
-  repeated agw.config.v1.Route routes = 4;
+  string version_id = 1;                    // 版本号 (例如 "v1-timestamp")，用于追踪配置的一致性和去重
+  repeated agw.config.v1.Listener listeners = 2; // 监听器列表 (端口、TLS 配置)
+  repeated agw.config.v1.Cluster clusters = 3;   // 服务集群列表 (后端 IP 地址池)
+  repeated agw.config.v1.Route routes = 4;       // 路由规则列表 (路径匹配、插件链)
 }

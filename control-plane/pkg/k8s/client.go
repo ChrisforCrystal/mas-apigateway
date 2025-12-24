@@ -31,6 +31,7 @@ func NewClient() (*kubernetes.Clientset, *rest.Config, error) {
 	return clientset, config, nil
 }
 
+// CRD的
 // NewDynamicClient 创建并返回一个新的 Dynamic Client。
 // Dynamic Client 用于处理未知的或自定义的 Kubernetes 资源（如 CRD）。
 func NewDynamicClient() (*dynamic.DynamicClient, error) {

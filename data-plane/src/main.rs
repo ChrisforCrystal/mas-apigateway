@@ -18,6 +18,14 @@ use wasm::WasmRuntime;
 // We can use client::agw::v1::ConfigSnapshot;
 
 pub struct AgwProxy {
+    // 【配置存储核心】 Arc<ArcSwap<T>>
+    // 这是一个非常经典的 "Read-Copy-Update" (RCU) 模式，专为读多写少的场景设计。
+    //
+    // 1. Arc<...>: 使得多线程可以共享同一个 "配置指针"。Pingora 的每个 worker 线程都持有这个 Arc。
+    // 2. ArcSwap<...>: 实现了【无锁替换】(Lock-Free Swap)。
+    //    - 读 (Read): 当成千上万个请求进来时，它们通过 `load()` 拿到当前的配置快照。这个操作极快，不需要抢锁 (Mutex)。
+    //    - 写 (Write): 当配置更新时，后台线程通过 `store()` 将旧配置原子替换为新配置。
+    //    - 效果: 更新配置的一瞬间，正在处理的旧请求继续用旧配置跑完，新进来的请求立刻用新配置。
     config: Arc<ArcSwap<client::agw::v1::ConfigSnapshot>>,
     wasm: WasmRuntime,
 }
@@ -147,14 +155,20 @@ impl ProxyHttp for AgwProxy {
 }
 
 fn main() {
+    // 初始化日志系统 (env_logger)，允许通过 RUST_LOG 环境变量控制日志级别
     env_logger::init();
+    
+    // 初始化 Pingora Server 实例
+    // Server 是 Pingora 的核心，负责管理工作线程、信号处理和平滑重启
     let mut server = Server::new(Some(Opt::default())).unwrap();
     server.bootstrap();
 
-    // Create Tokio Runtime for client
+    // 创建一个独立的 Tokio Runtime
+    // Pingora 内部有自己的 Runtime，但在启动 Pingora 之前，我们需要先用一个 Runtime 
+    // 去连 Control Plane 拿配置。这也是 Data Plane 的 "Bootstrap" 过程。
     let rt = tokio::runtime::Runtime::new().unwrap();
 
-    // 1. Fetch Initial Config (Blocking)
+    // 1. 获取 Control Plane 地址 (环境变量优先，默认本地)
     let cp_url = std::env::var("AGW_CONTROL_PLANE_URL")
         .unwrap_or_else(|_| "http://localhost:18000".to_string());
     println!(
@@ -162,22 +176,33 @@ fn main() {
         cp_url
     );
 
+    // 2.【同步阻塞】获取初始配置 (Initial Config Fetch)
+    // 我们的策略是：必须拿到第一份有效配置，才能启动网关服务。
+    // 如果连不上 Control Plane，或者拿到的是空配置，就死循环重试。
     let initial_config = rt.block_on(async {
         loop {
+            // 尝试建立 gRPC 连接
             match AgwClient::connect(cp_url.clone(), "node-1".to_string()).await {
                 Ok(mut client) => {
+                    // 构造握手请求 (Node Identity)
                     let request = tonic::Request::new(client::Node {
-                        id: "node-1".to_string(),
+                        id: "node-1".to_string(), // TODO: 应该动态生成或从配置读取
                         region: "us-east-1".to_string(),
                         version: "0.1.0".to_string(),
                     });
+                    
+                    // 发起 StreamConfig 请求
                     match client.client.stream_config(request).await {
                         Ok(resp) => {
+                            // 获取从 Server 返回的流 (Stream)
                             let mut stream = resp.into_inner();
+                            // 等待流里的第一条消息 (First Snapshot)
                             if let Ok(Some(snapshot)) = stream.message().await {
+                                // 校验配置有效性：如果 Listener 为空，说明 Control Plane 可能还没准备好
                                 if snapshot.listeners.is_empty() {
                                     eprintln!("Received config, but it has NO listeners (likely Control Plane is not ready). Retrying...");
                                 } else {
+                                    // 成功拿到有效配置！跳出循环，进入下一步
                                     return snapshot;
                                 }
                             }
@@ -187,6 +212,7 @@ fn main() {
                 }
                 Err(e) => eprintln!("Connection failed: {}", e),
             }
+            // 失败重试，防止把 CPU 跑满
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         }
     });

@@ -93,9 +93,15 @@ func (r *Registry) ListClusters() []*agwv1.Cluster {
 // StoreCRDRoutes 更新 Registry 中的路由规则。
 // 这些路由通常来自自定义资源 (CRD) 或 Ingress 资源的转换结果。
 func (r *Registry) StoreCRDRoutes(routes []*agwv1.Route) {
+	// 获取写锁 (Write Lock)：互斥锁，确保同一时间只有一个协程能修改路由表
+	// 在持有写锁期间，任何其他协程的读锁 (RLock) 和写锁 (Lock) 请求都会被阻塞
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	defer r.mu.Unlock() // 函数退出时自动释放锁
+	
+	// 全量替换路由列表
 	r.routes = routes
+	
+	// 触发变更通知，告知控制平面主循环配置已更新
 	r.notify()
 }
 
