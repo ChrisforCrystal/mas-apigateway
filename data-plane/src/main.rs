@@ -11,6 +11,7 @@ mod client;
 use client::AgwClient;
 mod wasm;
 use wasm::WasmRuntime;
+use wasm::ExternalResources; // Import struct
 // We need to import the proto types. They are re-exported in client usually or accessible.
 // client.rs exposes Node. We need ConfigSnapshot too.
 // Let's rely on client code to return us something or expose it.
@@ -74,7 +75,7 @@ impl ProxyHttp for AgwProxy {
                     for plugin in &route.plugins {
                         // 调用 Wasm 运行时的 run_plugin
                         // 注意：这里 clone 了一份 headers 传给 Wasm
-                        match self.wasm.run_plugin(&plugin.wasm_path, headers.clone()) {
+                        match self.wasm.run_plugin(&plugin.wasm_path, headers.clone()).await {
                             Ok(allow) => {
                                 if !allow {
                                     // 插件拒绝 (如 Wasm 返回 1)
@@ -245,7 +246,8 @@ fn main() {
     // 因此，我们需要克隆一份给 config_store。
     let config_store = Arc::new(ArcSwap::from_pointee(initial_config.clone()));
 
-    let wasm_runtime = WasmRuntime::new();
+    let resources = init_resources(&initial_config);
+    let wasm_runtime = WasmRuntime::new(resources);
     // 这个AgwProxy实现了一个trait ProxyHttp，Pingora会调用这个trait的
     let proxy_service = AgwProxy {
         config: config_store.clone(),
@@ -366,4 +368,55 @@ fn main() {
 
     server.add_service(my_proxy);
     server.run_forever();
+}
+
+fn init_resources(config: &client::agw::v1::ConfigSnapshot) -> ExternalResources {
+    let mut resources = ExternalResources::default();
+    
+    // config.resources is of type Option<Config::ExternalResources>
+    if let Some(res_config) = &config.resources {
+         // Redis
+         for r in &res_config.redis {
+             // redis::Client::open 仅仅是解析 URL 并创建一个 "客户端工厂"。
+             // 它此时 **不会** 建立网络连接，也不会占用 TCP 资源。
+             // 真正的连接是在 Wasm 运行时调用 `get_multiplexed_async_connection()` 时才建立的。
+             match redis::Client::open(r.address.as_str()) {
+                 Ok(client) => {
+                     println!("Initialized Redis client: {}", r.name);
+                     resources.redis.insert(r.name.clone(), client);
+                 },
+                 Err(e) => eprintln!("Failed to init Redis {}: {}", r.name, e),
+             }
+         }
+         
+         // DB (Postgres)
+         for db in &res_config.databases {
+             if db.r#type == "postgres" {
+                 // PgPoolOptions::new() 创建一个连接池配置。
+                 // connect_lazy():
+                 // 1. **Lazy (懒加载)**: 这里调用完并不会立刻去连数据库，不会报错。
+                 // 2. **Pooling (池化)**: 只有当 Wasm 第一次执行 SQL 时，Pool 才会真正创建连接。
+                 // 3. **Reuse (复用)**: 比如默认 max_connections=10，后续请求会复用这些连接，不会每次都握手。
+                 // 相比 Redis Client 的工厂模式，这里的 Pool 是以 "连接复用" 为核心设计的。
+                 match sqlx::postgres::PgPoolOptions::new().connect_lazy(&db.connection_string) {
+                    Ok(pool) => {
+                         println!("Initialized Postgres pool: {}", db.name);
+                         resources.postgres.insert(db.name.clone(), pool);
+                    },
+                    Err(e) => eprintln!("Failed to init DB {}: {}", db.name, e),
+                 }
+             } else if db.r#type == "mysql" {
+                 match sqlx::mysql::MySqlPoolOptions::new().connect_lazy(&db.connection_string) {
+                    Ok(pool) => {
+                         println!("Initialized MySQL pool: {}", db.name);
+                         resources.mysql.insert(db.name.clone(), pool);
+                    },
+                    Err(e) => eprintln!("Failed to init MySQL {}: {}", db.name, e),
+                 }
+             } else {
+                 eprintln!("Unsupported DB type: {}", db.r#type);
+             }
+         }
+    }
+    resources
 }

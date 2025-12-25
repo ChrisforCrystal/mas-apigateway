@@ -23,7 +23,6 @@ message Node {
 }
 
 // 引用 config.proto 中定义的具体配置结构 (Listener, Route, Cluster)
-
 import "config.proto";
 
 // ConfigSnapshot 包含数据平面所需的所有配置信息的全量快照。
@@ -33,4 +32,5 @@ message ConfigSnapshot {
   repeated agw.config.v1.Listener listeners = 2; // 监听器列表 (端口、TLS 配置)
   repeated agw.config.v1.Cluster clusters = 3;   // 服务集群列表 (后端 IP 地址池)
   repeated agw.config.v1.Route routes = 4;       // 路由规则列表 (路径匹配、插件链)
+  agw.config.v1.ExternalResources resources = 5; // 外部资源配置 (Redis, DB)
 }

@@ -42,3 +42,20 @@ message Endpoint {
   uint32 port = 2;
   map<string, string> metadata = 3;
 }
+
+message RedisConfig {
+  string name = 1;
+  string address = 2; // e.g. "redis://127.0.0.1:6379"
+}
+
+message DatabaseConfig {
+  string name = 1; // e.g., "products-db"
+  string type = 2; // "postgres" or "mysql"
+  string connection_string = 3; // e.g., "postgres://user:pass@host:5432/db" or "mysql://user:pass@host:3306/db"
+  int32 max_connections = 4; // default: 10
+}
+
+message ExternalResources {
+  repeated RedisConfig redis = 1;
+  repeated DatabaseConfig databases = 2;
+}

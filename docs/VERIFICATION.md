@@ -58,6 +58,107 @@
 
 ---
 
+## 场景四：插件增强功能验证 (Plugin Enhancements)
+
+**🎯 验证目标**: (新增)
+
+- **Redis 交互**: 验证 `redis-demo` 插件能通过 `INCR` 指令实现访问计数。
+- **数据库查询**: 验证 `db-demo` 插件能根据 Header 动态查询 Postgres 或 MySQL。
+- **配置下发**: 验证 ConfigMap 中的 `external_resources` 能正确驱动连接池初始化。
+
+**✅ 适用场景**: 本地开发 / Docker 环境 (需依赖外部 Redis/DB)。
+
+### 1. 前置准备 (Prerequisites)
+
+你需要启动 Redis, Postgres, MySQL 服务。推荐使用 Docker Compose 快速拉起：
+
+```bash
+# 启动依赖服务
+docker run -d --name my-redis -p 6379:6379 redis:alpine
+docker run -d --name my-postgres -p 5432:5432 -e POSTGRES_PASSWORD=password -e POSTGRES_DB=mydb postgres:alpine
+docker run -d --name my-mysql -p 3306:3306 -e MYSQL_ROOT_PASSWORD=password -e MYSQL_DATABASE=mydb mysql:8
+```
+
+并在数据库中插入测试数据：
+
+```bash
+# Postgres
+docker exec -it my-postgres psql -U postgres -d mydb -c "CREATE TABLE users (id SERIAL PRIMARY KEY, username TEXT); INSERT INTO users (username) VALUES ('alice');"
+
+# MySQL
+docker exec -it my-mysql mysql -uroot -ppassword mydb -e "CREATE TABLE products (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255)); INSERT INTO products (name) VALUES ('apple');"
+```
+
+### 2. 编译新插件
+
+```bash
+# 1. 编译 Redis Demo
+cd plugins/redis-demo
+cargo build --target wasm32-unknown-unknown --release
+
+# 2. 编译 DB Demo
+cd ../db-demo
+cargo build --target wasm32-unknown-unknown --release
+```
+
+### 3. 配置与验证 (Local 模式)
+
+在 `control-plane/config.yaml` 中添加资源配置和插件路由：
+
+```yaml
+# 新增: 外部资源配置
+resources:
+  redis:
+    - name: "default"
+      address: "redis://127.0.0.1:6379/"
+  databases:
+    - name: "users-pg"
+      type: "postgres"
+      connection_string: "postgres://postgres:password@127.0.0.1:5432/mydb"
+    - name: "products-mysql"
+      type: "mysql"
+      connection_string: "mysql://root:password@127.0.0.1:3306/mydb"
+
+routes:
+  # ... 原有路由 ...
+  - match: "/redis-test"
+    cluster: "my-local-cluster"
+    plugins:
+      - name: "rate-limiter"
+        wasm_path: "/Abs/Path/To/plugins/redis-demo/.../release/redis_demo.wasm"
+
+  - match: "/db-test"
+    cluster: "my-local-cluster"
+    plugins:
+      - name: "query-demo"
+        wasm_path: "/Abs/Path/To/plugins/db-demo/.../release/db_demo.wasm"
+```
+
+**测试命令**:
+
+1.  **Redis 验证**:
+
+    ```bash
+    # 第一次访问 (Redis INCR -> 1) -> Allow (200)
+    curl -v -H "X-User-ID: u1" http://localhost:6188/redis-test
+
+    # ... 当访问次数超过 5 次 ...
+    # 第六次访问 -> Deny (403)
+    curl -v -H "X-User-ID: u1" http://localhost:6188/redis-test
+    ```
+
+2.  **DB 验证**:
+
+    ```bash
+    # Postgres 查询 (默认) -> 查到 'alice' -> Allow (200)
+    curl -v http://localhost:6188/db-test
+
+    # MySQL 查询 -> 查到 'apple' -> Allow (200)
+    curl -v -H "X-DB-Type: mysql" http://localhost:6188/db-test
+    ```
+
+---
+
 ## 场景二：Docker 环境验证 (Docker Environment)
 
 **🎯 验证目标**:
