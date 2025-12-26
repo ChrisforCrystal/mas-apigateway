@@ -1,4 +1,16 @@
 version: "1.0"
+resources:
+  redis:
+    - name: "default"
+      address: "redis://127.0.0.1:6379/"
+  databases:
+    - name: "users-pg"
+      type: "postgres"
+      connection_string: "postgres://postgres:password@127.0.0.1:5432/mydb"
+    - name: "products-mysql"
+      type: "mysql"
+      connection_string: "mysql://root:password@127.0.0.1:3306/mydb"
+
 listeners:
   - name: "http-listener"
     address: "0.0.0.0"
@@ -6,9 +18,27 @@ listeners:
     routes:
       - match: "/new"
         cluster: "my-local-cluster"
-        # plugins:
-        #   - name: "deny-curl"
-        #     wasm_path: "/Create/Absolute/Path/To/plugins/deny-all/target/wasm32-unknown-unknown/release/deny_all.wasm"
+        plugins:
+          - name: "deny-curl"
+            wasm_path: "/Create/Absolute/Path/To/plugins/deny-all/target/wasm32-unknown-unknown/release/deny_all.wasm"
+
+      # 新增 Redis 测试路由
+      - match: "/redis"
+        cluster: "my-local-cluster"
+        plugins:
+          - name: "rate-limiter"
+            # 请确认此路径正确
+            wasm_path: "/Users/jiwn2/dev/masallsome/masapigateway/plugins/redis-demo/target/wasm32-unknown-unknown/release/redis_demo.wasm"
+
+      # 新增 DB 测试路由
+      - match: "/db"
+        cluster: "my-local-cluster"
+        plugins:
+          - name:
+              "query-demo"
+              # 请确认此路径正确
+            wasm_path: "/Users/jiwn2/dev/masallsome/masapigateway/plugins/db-demo/target/wasm32-unknown-unknown/release/db_demo.wasm"
+
   - name: "https-listener"
     address: "0.0.0.0"
     port: 6443
@@ -25,5 +55,5 @@ clusters:
         port: 80
   - name: "my-local-cluster"
     endpoints:
-      - address: "host.docker.internal"
+      - address: "127.0.0.1"
         port: 9000

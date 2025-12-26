@@ -6,320 +6,153 @@
 
 ## 场景一：本地开发模式 (Local Development)
 
-**🎯 验证目标**:
-
-- **基础业务逻辑**: 路由转发、请求头处理。
-- **Wasm 插件**: 验证插件能否正确加载和拦截请求。
-- **热更新**: 修改 `config.yaml` 或 Wasm 文件，验证无需重启即可生效。
-
-**✅ 适用场景**: 日常编码、快速调试 (Debug)、功能开发。
-**⚠️ 局限性**: 无法验证 TLS (因 macOS/Linux OpenSSL 差异)，K8s 交互仅限于读取 kubeconfig。
+**🎯 验证目标**: 快速迭代业务逻辑、Wasm 插件开发、配置热更新。
 
 ### 操作步骤
 
 1. **启动控制面 (Control Plane)**:
-   > ⚠️ **注意**: 本地运行时如果缺少 K8s 连接，HTTPS 监听器因缺少证书将无法启动，但这不影响 HTTP (6188) 功能验证。
+
    ```bash
    cd control-plane
    # 确保 config.yaml 存在
    go run cmd/server/main.go
    ```
-2. **启动数据面 (Data Plane)**:
-   > 数据面会尝试连接控制面获取动态配置。
+
+2. **启动数据面 (Data Plane)** (新终端):
+
    ```bash
    cd data-plane
    # 指定控制面地址
    export AGW_CONTROL_PLANE_URL="http://localhost:18000"
-   # 开启详细日志
    export RUST_LOG=debug
    cargo run
    ```
-3. **测试**:
-   - HTTP 请求: `curl -v http://localhost:6188/new`
-   - **Wasm 插件配置与验证**:
-     1. **编译插件**:
-        ```bash
-        cd plugins/deny-all
-        cargo build --target wasm32-unknown-unknown --release
-        ```
-     2. **修改配置** (`control-plane/config.yaml`):
-        在路由下添加 `plugins` 字段 (请使用绝对路径):
-        ```yaml
-        routes:
-          - match: "/new"
-            cluster: "my-local-cluster"
-            plugins:
-              - name: "deny-curl"
-                wasm_path: "/Create/Absolute/Path/To/plugins/deny-all/target/wasm32-unknown-unknown/release/deny_all.wasm"
-        ```
-     3. **验证拦截**:
-        - `curl -v http://localhost:6188/new` -> **403 Forbidden** (因为 User-Agent 包含 curl)
-        - `curl -v -H "User-Agent: browser" http://localhost:6188/new` -> **200 OK**
 
----
-
-## 场景四：插件增强功能验证 (Plugin Enhancements)
-
-**🎯 验证目标**: (新增)
-
-- **Redis 交互**: 验证 `redis-demo` 插件能通过 `INCR` 指令实现访问计数。
-- **数据库查询**: 验证 `db-demo` 插件能根据 Header 动态查询 Postgres 或 MySQL。
-- **配置下发**: 验证 ConfigMap 中的 `external_resources` 能正确驱动连接池初始化。
-
-**✅ 适用场景**: 本地开发 / Docker 环境 (需依赖外部 Redis/DB)。
-
-### 1. 前置准备 (Prerequisites)
-
-你需要启动 Redis, Postgres, MySQL 服务。推荐使用 Docker Compose 快速拉起：
-
-```bash
-# 启动依赖服务
-docker run -d --name my-redis -p 6379:6379 redis:alpine
-docker run -d --name my-postgres -p 5432:5432 -e POSTGRES_PASSWORD=password -e POSTGRES_DB=mydb postgres:alpine
-docker run -d --name my-mysql -p 3306:3306 -e MYSQL_ROOT_PASSWORD=password -e MYSQL_DATABASE=mydb mysql:8
-```
-
-并在数据库中插入测试数据：
-
-```bash
-# Postgres
-docker exec -it my-postgres psql -U postgres -d mydb -c "CREATE TABLE users (id SERIAL PRIMARY KEY, username TEXT); INSERT INTO users (username) VALUES ('alice');"
-
-# MySQL
-docker exec -it my-mysql mysql -uroot -ppassword mydb -e "CREATE TABLE products (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255)); INSERT INTO products (name) VALUES ('apple');"
-```
-
-### 2. 编译新插件
-
-```bash
-# 1. 编译 Redis Demo
-cd plugins/redis-demo
-cargo build --target wasm32-unknown-unknown --release
-
-# 2. 编译 DB Demo
-cd ../db-demo
-cargo build --target wasm32-unknown-unknown --release
-```
-
-### 3. 配置与验证 (Local 模式)
-
-在 `control-plane/config.yaml` 中添加资源配置和插件路由：
-
-```yaml
-# 新增: 外部资源配置
-resources:
-  redis:
-    - name: "default"
-      address: "redis://127.0.0.1:6379/"
-  databases:
-    - name: "users-pg"
-      type: "postgres"
-      connection_string: "postgres://postgres:password@127.0.0.1:5432/mydb"
-    - name: "products-mysql"
-      type: "mysql"
-      connection_string: "mysql://root:password@127.0.0.1:3306/mydb"
-
-routes:
-  # ... 原有路由 ...
-  - match: "/redis-test"
-    cluster: "my-local-cluster"
-    plugins:
-      - name: "rate-limiter"
-        wasm_path: "/Abs/Path/To/plugins/redis-demo/.../release/redis_demo.wasm"
-
-  - match: "/db-test"
-    cluster: "my-local-cluster"
-    plugins:
-      - name: "query-demo"
-        wasm_path: "/Abs/Path/To/plugins/db-demo/.../release/db_demo.wasm"
-```
-
-**测试命令**:
-
-1.  **Redis 验证**:
-
-    ```bash
-    # 第一次访问 (Redis INCR -> 1) -> Allow (200)
-    curl -v -H "X-User-ID: u1" http://localhost:6188/redis-test
-
-    # ... 当访问次数超过 5 次 ...
-    # 第六次访问 -> Deny (403)
-    curl -v -H "X-User-ID: u1" http://localhost:6188/redis-test
-    ```
-
-2.  **DB 验证**:
-
-    ```bash
-    # Postgres 查询 (默认) -> 查到 'alice' -> Allow (200)
-    curl -v http://localhost:6188/db-test
-
-    # MySQL 查询 -> 查到 'apple' -> Allow (200)
-    curl -v -H "X-DB-Type: mysql" http://localhost:6188/db-test
-    ```
+3. **基础验证**:
+   ```bash
+   # 测试 HTTP 路由
+   curl -v http://localhost:6188/new
+   ```
 
 ---
 
 ## 场景二：Docker 环境验证 (Docker Environment)
 
-**🎯 验证目标**:
+**🎯 验证目标**: 在纯净的容器环境中验证全链路依赖 (Redis, DBs, Upstream) 和网络连通性。
 
-- **TLS 终结 (HTTPS)**: 验证在标准 Linux/OpenSSL 环境下证书加载和握手是否正常。
-- **环境一致性**: 验证构建产物 (`Dockerfile`) 可在 Linux 容器中正常运行。
+### 1. 启动环境
 
-**✅ 适用场景**: 提交代码前验证、解决跨平台库兼容性问题 (如 TLS 报错)。
-
-### 操作步骤
-
-1. **构建镜像**:
-   ```bash
-   make docker-build
-   # 或者: docker build -f data-plane/Dockerfile -t masapigateway/data-plane:latest .
-   ```
-2. **运行数据面容器**:
-   ```bash
-   # 假设控制面仍在本地运行 (端口 18000)
-   docker run --rm -p 6188:6188 -p 6443:6443 \
-     -e AGW_CONTROL_PLANE_URL="http://host.docker.internal:18000" \
-     masapigateway/data-plane:latest
-   ```
-3. **测试 HTTPS**:
-   ```bash
-   curl -k -v https://localhost:6443/secure
-   ```
-   _在此模式下，TLS 握手应成功。_
-
----
-
-## 场景三：集群集成验证 (K8s Cluster)
-
-**🎯 验证目标**:
-
-- **Operator 模式**: 验证控制面能否正确 watch K8s 资源 (Services, Secrets, CRDs)。
-- **RBAC 权限**: 验证 ServiceAccount 是否有权限读取资源。
-- **CRD 动态路由**: 验证 `GatewayRoute` 自定义资源的生效情况。
-- **全链路部署**: 验证 Deployment/Service/ConfigMap 的定义是否正确。
-
-**✅ 适用场景**: 集成测试、生产部署前验收、验证 K8s 特有功能。
-
-### 操作步骤
-
-1. **构建镜像**:
-   ```bash
-   make docker-build
-   # 构建 Control Plane 和 Data Plane 镜像
-   # 如果使用 Kind，还需要加载镜像: kind load docker-image masapigateway/control-plane:latest masapigateway/data-plane:latest
-   ```
-2. **部署 Operator**:
-   ```bash
-   make deploy
-   # 这将自动应用 RBAC, CRD, Deployment 到当前 K8s 集群
-   ```
-3. **创建测试资源**:
-   ```bash
-   # 1. 创建 TLS Secret
-   kubectl create secret tls my-tls-secret --cert=server.crt --key=server.key
-   # 2. 创建动态路由 (CRD)
-   kubectl apply -f k8s-test-crd.yaml
-   ```
-4. **验证**:
-
-   - **查看日志**: `kubectl logs -l app=mas-agw-control-plane` 确认监听到事件。
-   - **访问服务**:
-
-     ```bash
-
-     kubectl port-forward svc/mas-agw-data-plane 6188:80
-     curl -k -v https://localhost:6443/dynamic
-     # 端口转发到本地进行测试
-     kubectl port-forward svc/mas-agw-data-plane 6443:443
-     curl -k -v https://localhost:6443/dynamic
-     ```
-
----
-
-## 总结
-
-| 验证模式     | 关注点              | 核心优势               |
-| :----------- | :------------------ | :--------------------- |
-| **本地开发** | 业务逻辑、Wasm      | 开发速度快，Debug 方便 |
-| **Docker**   | TLS、二进制兼容性   | 环境纯净，消除系统差异 |
-| **K8s 集群** | Operator、CRD、RBAC | 真实场景，集成测试     |
-
----
-
-## 补充：证书与安全概念 (Certificate Management)
-
-### 1. 核心文件说明
-
-在 TLS/HTTPS 配置中，通常涉及以下三种文件：
-
-| 文件后缀        | 全称                   | 说明                                                           | 谁持有                        |
-| :-------------- | :--------------------- | :------------------------------------------------------------- | :---------------------------- |
-| **.key**        | Private Key (私钥)     | **核心机密**。用于解密数据和数字签名。泄露意味着安全防线崩塌。 | **仅网关服务端** (Data Plane) |
-| **.crt / .pem** | Certificate (公钥证书) | 包含公钥和身份信息。相当于“身份证”，用于向对方证明身份。       | **服务端持有，客户端验证**    |
-| **CA**          | Certificate Authority  | 签发证书的权威机构。CA 的根证书用于验证其他证书的合法性。      | **客户端** (放入信任库)       |
-
-### 2. 本项目证书流转
-
-`masapigateway` 采用 **Server-Side TLS (单向认证)** 模式：
-
-1.  **生成 (Generate)**: 管理员使用 `openssl` 生成 `server.key` (私钥) 和 `server.crt` (自签证书)。
-2.  **上传 (Upload)**: 通过 `kubectl create secret generic` 将其存入 Kubernetes Secret。
-3.  **分发 (Distribute)**: Control Plane 读取 Secret 并通过 gRPC 全量推送给 Data Plane。
-4.  **使用 (Usage)**: Data Plane 启动 HTTPS 监听。
-5.  **验证 (Verify)**: Client (curl) 发起请求，网关出示 `server.crt`。
-
-### 3. 如何生成测试证书
-
-我们在 `Makefile` 中并未集成生成逻辑，你需要手动生成：
+我们在 `deploy/docker` 目录下准备了完整的一键启动环境。
 
 ```bash
-# 1. 生成私钥
-openssl genrsa -out server.key 2048
-
-# 2. 生成自签证书 (有效期 365 天)
-# -nodes: 不加密私钥
-# -subj: 避免交互式输入信息，CN (Common Name) 必须匹配域名 (这里是 localhost)
-openssl req -new -x509 -sha256 -key server.key -out server.crt -days 365 -nodes \
-  -subj "/C=CN/ST=Beijing/L=Beijing/O=MasAllSome/OU=Gateway/CN=localhost"
+cd deploy/docker
+docker-compose up --build -d
 ```
 
-### 4. 常见问题
+### 2. 准备测试数据 (Data Seeding)
 
-- **为什么 curl 需要 `-k`?**
-  因为我们使用自签证书，curl 默认不信任非权威 CA 签发的证书。`-k` 意为 "Insecure"，即跳过验证。
-- **如何不加 `-k` 也能访问？**
-  客户端需要显式信任你的证书：
-  ```bash
-  curl --cacert server.crt https://localhost:6443/
-  ```
+为了验证数据库插件，我们需要先在数据库中创建表并插入数据。
 
-### 5. 深入理解 CA 与信任链
+**Postgres (用于 users-pg)**:
 
-针对 "CA 在通信中起什么作用" 这一常见疑问：
+```bash
+# 进入 Postgres 容器执行 SQL
+docker exec -it mas-postgres psql -U postgres -d mydb -c "CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, username TEXT); INSERT INTO users (username) VALUES ('alice');"
+```
 
-- **CA 的角色**: 类似于现实生活中的 **“公证处”** 或 **“身份证签发机关”**。
-  - 它**不参与**你（客户端）和网关（服务端）的日常加密通信（数据不经过 CA）。
-  - 它的核心作用是 **“信用背书”**：在握手阶段，证明网关出示的证书是合法的。
-- **信任的传递逻辑**:
-  1.  **客户端信任 CA**: 你手动将 CA 的根证书（Root Cert）加入到操作系统或浏览器的 **“受信任的根证书颁发机构”** 列表中。
-  2.  **CA 信任网关**: CA 用自己的私钥给网关的证书（server.crt）进行了**数字签名**。
-  3.  **结果**: 当你访问网关时，浏览器看到网关证书上有 CA 的签名，因为你信任 CA，所以你也自动信任了这个网关。
-- **关于“带着公钥访问”**:
-  - 客户端**不需要**发送公钥给网关。
-  - 客户端使用的是**本地信任库中 CA 的公钥**，去解密和验证网关证书上的签名。一旦验证通过，就建立连接。
+**MySQL (用于 products-mysql)**:
 
-### 6. mTLS (双向认证) 科普
+```bash
+# 进入 MySQL 容器执行 SQL
+docker exec -it mas-mysql mysql -uroot -ppassword mydb -e "CREATE TABLE IF NOT EXISTS products (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255)); INSERT INTO products (name) VALUES ('apple');"
+```
 
-既然提到了 mTLS，这里也简单介绍一下它的区别：
+### 3. 执行验证
 
-- **场景**: 只有在 **极高安全要求**（如银行 U 盾、微服务网格 Istio）场景下才会开启。
-- **逻辑 (双向)**:
-  1.  **Client -> Gateway**: 客户端验证网关证书（和上面一样）。
-  2.  **Gateway -> Client**: **新增步骤**。网关要求客户端：“出示你的证件”。
-  3.  **Client Response**: 客户端发送自己的证书（Client Cert）和签名。
-  4.  **Gateway Verify**: 网关拿着 **“Client CA”** (必须预先配置在网关上) 去验证客户端证书是真的。
-      - _(回答你的疑问)_: 是的，这意味着 **Client 必须持有由网关信任的 CA 所签发的证书**。换句话说，确实是“网关（或者其背后的组织）之前发给 Client 的”。
-- **差异点**:
-  - 单向认证：只有网关有 `.key`。
-  - 双向认证：**双方都有** 自己的 `.key` 和 `.crt`，且**双方都有** 对方的 CA 公钥来进行验证。
+**Redis 限流测试**:
+
+```bash
+# 第一次: 200 OK
+curl -v -H "X-User-ID: u1" http://localhost:6188/redis
+# ... 连续执行 6 次 ...
+# 第六次: 403 Forbidden (限流生效)
+```
+
+**Postgres 查询测试**:
+
+```bash
+# 默认查 Postgres
+# 预期: Log 中打印 Query Result (如 ["alice"]), Curl 返回页面
+curl -v -H "X-DB-Type: postgres" http://localhost:6188/db
+```
+
+**MySQL 查询测试**:
+
+```bash
+# 指定查 MySQL
+# 预期: Log 中打印 Query Result (如 ["apple"]), Curl 返回页面
+curl -v -H "X-DB-Type: mysql" http://localhost:6188/db
+```
+
+---
+
+## 场景三：Kubernetes 集群验证 (K8s Cluster)
+
+**🎯 验证目标**: 验证 Operator、CRD、RBAC 权限及生产环境部署，以及插件对集群内服务（Redis/DB）的访问。
+
+### 操作步骤
+
+1. **构建并加载镜像** (以 Kind 为例):
+
+   ```bash
+   make docker-build
+   kind load docker-image masapigateway/control-plane:latest masapigateway/data-plane:latest
+   ```
+
+2. **部署资源**:
+
+   ```bash
+   # 1. 启动依赖服务 (Redis, DBs) 和配置
+   kubectl apply -f deploy/kubernetes/k8s-deps.yaml
+
+   # 2. 准备测试数据 (Data Seeding)
+   # ⚠️ 注意: 需等待 Redis/DB Pod 状态为 Running 后执行
+   kubectl wait --for=condition=ready pod -l app=postgres --timeout=60s
+   kubectl wait --for=condition=ready pod -l app=mysql --timeout=60s
+
+   kubectl exec -it deployment/postgres -- psql -U postgres -d mydb -c "CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, username TEXT); INSERT INTO users (username) VALUES ('bob_k8s');"
+   kubectl exec -it deployment/mysql -- mysql -uroot -ppassword mydb -e "CREATE TABLE IF NOT EXISTS products (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255)); INSERT INTO products (name) VALUES ('banana_k8s');"
+
+   # 3. 部署网关 (CRD, Deployment, RBAC)
+   kubectl apply -f deploy/kubernetes/
+   ```
+
+3. **验证**:
+
+   ```bash
+   # 端口转发 Data Plane 服务到本地
+   kubectl port-forward svc/mas-agw-data-plane 6188:80 &
+
+   # 验证 Redis
+   curl -v -H "X-User-ID: k8s_user" http://localhost:6188/redis
+
+   # 验证 Postgres
+   # 预期: Log (kubectl logs) 中打印 ["bob_k8s"]，Curl 返回页面内容
+   curl -v -H "X-DB-Type: postgres" http://localhost:6188/db
+
+   # 验证 MySQL
+   # 预期: Log (kubectl logs) 中打印 ["banana_k8s"]，Curl 返回页面内容
+   curl -v -H "X-DB-Type: mysql" http://localhost:6188/db
+   ```
+
+---
+
+## 目录结构说明
+
+- **deploy/kubernetes/**: 包含所有 K8s 部署文件。
+  - `k8s-deps.yaml`: Redis/DB 依赖服务。
+  - `configmap.yaml`: 网关核心配置。
+  - `crd.yaml`, `deployment.yaml` 等: 网关组件。
+- **deploy/docker/**: 包含 Docker Compose 环境配置。
+- **plugins/**: 包含所有演示用的 Wasm 插件源码。
+- **target/**: 编译产物目录。

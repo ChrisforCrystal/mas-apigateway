@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 
 	agwv1 "github.com/masallsome/masapigateway/control-plane/pkg/proto"
@@ -19,6 +20,12 @@ func LoadConfig(path string) (*agwv1.ConfigSnapshot, error) {
 	if err := yaml.Unmarshal(data, &dslConfig); err != nil {
 		return nil, err
 	}
+	fmt.Printf("DEBUG: Loaded Config DSL: %+v\n", dslConfig)
+	if dslConfig.Resources != nil {
+		fmt.Printf("DEBUG: Loaded Resources: %+v\n", dslConfig.Resources)
+	} else {
+		fmt.Println("DEBUG: Loaded Resources is NIL")
+	}
 
 	return ToProto(&dslConfig, data), nil
 }
@@ -29,6 +36,26 @@ func ToProto(dsl *Config, rawData []byte) *agwv1.ConfigSnapshot {
 		Listeners: make([]*agwv1.Listener, 0),
 		Clusters:  make([]*agwv1.Cluster, 0),
 		Routes:    make([]*agwv1.Route, 0),
+	}
+
+	if dsl.Resources != nil {
+		snapshot.Resources = &agwv1.ExternalResources{
+			Redis:     make([]*agwv1.RedisConfig, 0),
+			Databases: make([]*agwv1.DatabaseConfig, 0),
+		}
+		for _, r := range dsl.Resources.Redis {
+			snapshot.Resources.Redis = append(snapshot.Resources.Redis, &agwv1.RedisConfig{
+				Name:    r.Name,
+				Address: r.Address,
+			})
+		}
+		for _, db := range dsl.Resources.Databases {
+			snapshot.Resources.Databases = append(snapshot.Resources.Databases, &agwv1.DatabaseConfig{
+				Name:             db.Name,
+				Type:             db.Type,
+				ConnectionString: db.ConnectionString,
+			})
+		}
 	}
 
 	for _, l := range dsl.Listeners {

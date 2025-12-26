@@ -3,8 +3,25 @@ package config
 // Config represents the root of the configuration file.
 type Config struct {
 	Version   string     `yaml:"version"`
+	Resources *Resources `yaml:"resources,omitempty"`
 	Listeners []Listener `yaml:"listeners"`
 	Clusters  []Cluster  `yaml:"clusters"`
+}
+
+type Resources struct {
+	Redis     []RedisConfig    `yaml:"redis"`
+	Databases []DatabaseConfig `yaml:"databases"`
+}
+
+type RedisConfig struct {
+	Name    string `yaml:"name"`
+	Address string `yaml:"address"`
+}
+
+type DatabaseConfig struct {
+	Name             string `yaml:"name"`
+	Type             string `yaml:"type"`
+	ConnectionString string `yaml:"connection_string"`
 }
 
 type Listener struct {
