@@ -137,7 +137,11 @@ impl WasmRuntime {
                             if mem.read(&caller, name_ptr as usize, &mut buf).is_err() {
                                 return Ok(-1);
                             }
-                            String::from_utf8(buf).unwrap_or_default()
+                            {
+                                let s = String::from_utf8(buf).unwrap_or_default();
+                                println!("DEBUG: redis name = {}", s);
+                                s
+                            }
                         };
 
                         // 3.【读取 Redis 命令 (JSON)】
@@ -176,10 +180,19 @@ impl WasmRuntime {
                                 // 获取一个异步连接 (MultiplexedConnection)。
                                 // 这种连接是多路复用的，非常适合高并发场景。
                                 match client.get_multiplexed_async_connection().await {
-                                    Ok(c) => c,
-                                    Err(_) => return Ok(-5), // 连接失败返回 -5
+                                    Ok(c) => {
+                                        println!(
+                                            "DEBUG: Redis connection established successfully!"
+                                        );
+                                        c
+                                    }
+                                    Err(e) => {
+                                        println!("DEBUG: Redis connection FAILED: {}", e);
+                                        return Ok(-5);
+                                    } // 连接失败返回 -5
                                 }
                             } else {
+                                println!("DEBUG: Redis client NOT found in resources for key: '{}'. Available keys: {:?}", name, ctx.resources.redis.keys());
                                 return Ok(-4); // 没找到叫这个名字的 Redis，返回 -4
                             }
                         };
@@ -248,14 +261,22 @@ impl WasmRuntime {
                             if mem.read(&caller, name_ptr as usize, &mut buf).is_err() {
                                 return Ok(-1);
                             }
-                            String::from_utf8(buf).unwrap_or_default()
+                            {
+                                let s = String::from_utf8(buf).unwrap_or_default();
+                                println!("DEBUG: db name = {}", s);
+                                s
+                            }
                         };
                         let sql = {
                             let mut buf = vec![0u8; sql_len as usize];
                             if mem.read(&caller, sql_ptr as usize, &mut buf).is_err() {
                                 return Ok(-2);
                             }
-                            String::from_utf8(buf).unwrap_or_default()
+                            {
+                                let s = String::from_utf8(buf).unwrap_or_default();
+                                println!("DEBUG: sql name = {}", s);
+                                s
+                            }
                         };
 
                         let ctx = caller.data();
@@ -271,7 +292,10 @@ impl WasmRuntime {
                                             Err(_) => return Ok(-8),
                                         }
                                     }
-                                    serde_json::to_string(&results).unwrap_or_default()
+                                    let json_res =
+                                        serde_json::to_string(&results).unwrap_or_default();
+                                    println!("DEBUG: DB Query Result (Postgres): {}", json_res);
+                                    json_res
                                 }
                                 Err(_) => return Ok(-5),
                             }
@@ -286,9 +310,15 @@ impl WasmRuntime {
                                             Err(_) => return Ok(-8),
                                         }
                                     }
-                                    serde_json::to_string(&results).unwrap_or_default()
+                                    let json_res =
+                                        serde_json::to_string(&results).unwrap_or_default();
+                                    println!("DEBUG: DB Query Result (MySQL): {}", json_res);
+                                    json_res
                                 }
-                                Err(_) => return Ok(-5),
+                                Err(e) => {
+                                    println!("DEBUG: MySQL Query Failed: {}", e);
+                                    return Ok(-5);
+                                }
                             }
                         } else {
                             return Ok(-4);
@@ -369,7 +399,9 @@ impl WasmRuntime {
         // 把“蓝图” (Module) 变成“房子” (Instance)。
         // 关键点：使用 Linker 把 Host Function (宿主能力) 链接进这个实例。
         // 这样 Wasm 代码里调用的 "env.agw_get_header" 才能找到对应的 Rust 实现。
-        let instance = self.linker.instantiate(&mut store, &module)?;
+        println!("Host: instantiating module async...");
+        let instance = self.linker.instantiate_async(&mut store, &module).await?;
+        println!("Host: instantiation success");
 
         // get_typed_func 会检查类型签名是否匹配。
         // 5. 查找并绑定入口函数 "on_request"

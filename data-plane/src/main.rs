@@ -73,6 +73,7 @@ impl ProxyHttp for AgwProxy {
 
                     // 遍历执行该路由下的所有插件
                     for plugin in &route.plugins {
+                        println!("Executing Plugin: {}", plugin.name);
                         // 调用 Wasm 运行时的 run_plugin
                         // 注意：这里 clone 了一份 headers 传给 Wasm
                         match self.wasm.run_plugin(&plugin.wasm_path, headers.clone()).await {
@@ -246,7 +247,10 @@ fn main() {
     // 因此，我们需要克隆一份给 config_store。
     let config_store = Arc::new(ArcSwap::from_pointee(initial_config.clone()));
 
-    let resources = init_resources(&initial_config);
+    let resources = {
+        let _guard = rt.enter();
+        init_resources(&initial_config)
+    };
     let wasm_runtime = WasmRuntime::new(resources);
     // 这个AgwProxy实现了一个trait ProxyHttp，Pingora会调用这个trait的
     let proxy_service = AgwProxy {
@@ -374,6 +378,12 @@ fn init_resources(config: &client::agw::v1::ConfigSnapshot) -> ExternalResources
     let mut resources = ExternalResources::default();
     
     // config.resources is of type Option<Config::ExternalResources>
+    if let Some(res_config) = &config.resources {
+        println!("DEBUG: init_resources found resources config: {:?}", res_config);
+    } else {
+        println!("DEBUG: init_resources: config.resources is NONE (Empty)");
+    }
+    
     if let Some(res_config) = &config.resources {
          // Redis
          for r in &res_config.redis {

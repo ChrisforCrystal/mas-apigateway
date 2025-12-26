@@ -1,0 +1,53 @@
+version: "1.0"
+resources:
+  redis:
+    - name: "default"
+      address: "redis://redis:6379/"
+  databases:
+    - name: "users-pg"
+      type: "postgres"
+      connection_string: "postgres://postgres:password@postgres:5432/mydb"
+    - name: "products-mysql"
+      type: "mysql"
+      connection_string: "mysql://root:password@mysql:3306/mydb"
+
+listeners:
+  - name: "http-listener"
+    address: "0.0.0.0"
+    port: 6188
+    routes:
+      - match: "/new"
+        cluster: "upstream-cluster"
+        plugins:
+          - name: "deny-curl"
+            wasm_path: "/etc/mas-agw/plugins/deny_all.wasm"
+
+      # Redis Test Route
+      - match: "/redis"
+        cluster: "upstream-cluster"
+        plugins:
+          - name: "rate-limiter"
+            wasm_path: "/etc/mas-agw/plugins/redis_demo.wasm"
+
+      # DB Test Route
+      - match: "/db"
+        cluster: "upstream-cluster"
+        plugins:
+          - name: "query-demo"
+            wasm_path: "/etc/mas-agw/plugins/db_demo.wasm"
+
+  - name: "https-listener"
+    address: "0.0.0.0"
+    port: 6443
+    tls:
+      secret_name: "my-tls-secret"
+    routes:
+      - match: "/secure"
+        cluster: "upstream-cluster"
+
+clusters:
+  # Python Upstream
+  - name: "upstream-cluster"
+    endpoints:
+      - address: "upstream"
+        port: 8000

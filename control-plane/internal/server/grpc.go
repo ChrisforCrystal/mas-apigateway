@@ -105,6 +105,8 @@ func (s *AgwServer) broadcastMerged() {
 		Routes: append(staticCfg.Routes, s.registry.ListRoutes()...),
 		// 【合并集群】：先放入静态集群 (通常为空或测试用)
 		Clusters: staticCfg.Clusters,
+		// 【合并资源】：Redis 和数据库配置 (直接引用静态配置，因为目前 K8s 侧没有对应 CRD)
+		Resources: staticCfg.Resources,
 	}
 
 	// 继续追加 K8s 中发现的服务集群 (EndpointSlices 转换而来)
