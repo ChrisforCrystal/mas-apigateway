@@ -1,15 +1,43 @@
 apiVersion: agw.masallsome.io/v1
 kind: GatewayRoute
 metadata:
-  name: dynamic-route-demo
+  name: dynamic-deny-route
   namespace: default
 spec:
-  match: "/"
+  match: "/deny-crd"
   backend:
-    service_name: "my-nginx"
+    service_name: "upstream"
     port: 80
   plugins:
     - name: "header-check"
-      wasm_path: "/etc/agw/plugins/deny_all.wasm"
+      wasm_path: "/etc/mas-agw/plugins/deny_all.wasm"
       config:
         block_val: "curl"
+---
+apiVersion: agw.masallsome.io/v1
+kind: GatewayRoute
+metadata:
+  name: dynamic-redis-route
+  namespace: default
+spec:
+  match: "/redis-crd"
+  backend:
+    service_name: "upstream"
+    port: 80
+  plugins:
+    - name: "redis-limiter"
+      wasm_path: "/etc/mas-agw/plugins/redis_demo.wasm"
+---
+apiVersion: agw.masallsome.io/v1
+kind: GatewayRoute
+metadata:
+  name: dynamic-db-route
+  namespace: default
+spec:
+  match: "/db-crd"
+  backend:
+    service_name: "upstream"
+    port: 80
+  plugins:
+    - name: "db-query"
+      wasm_path: "/etc/mas-agw/plugins/db_demo.wasm"

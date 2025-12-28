@@ -21,24 +21,14 @@ data:
       - name: "http-listener"
         address: "0.0.0.0"
         port: 6188
-        routes:
-          - match: "/redis"
-            cluster: "nginx-cluster"
-            plugins:
-              - name: "rate-limiter"
-                wasm_path: "/etc/mas-agw/plugins/redis_demo.wasm"
-          - match: "/db"
-            cluster: "nginx-cluster"
-            plugins:
-              - name: "query-demo"
-                wasm_path: "/etc/mas-agw/plugins/db_demo.wasm"
+        routes: []
       - name: "https-listener"
         address: "0.0.0.0"
         port: 6443
         tls:
           secret_name: "my-tls-secret"
     clusters:
-      - name: "nginx-cluster"
+      - name: "upstream-cluster"
         endpoints:
-          - address: "my-nginx.default.svc.cluster.local"
+          - address: "upstream.default.svc.cluster.local"
             port: 80

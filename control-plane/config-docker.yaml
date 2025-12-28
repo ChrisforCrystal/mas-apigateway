@@ -50,4 +50,4 @@ clusters:
   - name: "upstream-cluster"
     endpoints:
       - address: "upstream"
-        port: 8000
+        port: 80

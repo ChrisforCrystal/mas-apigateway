@@ -28,90 +28,6 @@ services:
       retries: 5
 
   mysql:
-    image: mysql:8
-    container_name: mas-mysql
-    environment:
-      MYSQL_ROOT_PASSWORD: password
-      MYSQL_DATABASE: mydb
-    ports:
-      - "3306:3306"
-    command: --default-authentication-plugin=mysql_native_password
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  upstream:
-    image: python:3.9-slim
-    container_name: mas-upstream
-    command: python3 -m http.server 8000
-    ports:
-      - "9000:8000"
-
-  # --- Core Components ---
-  control-plane:
-    build:
-      context: ../../control-plane
-    container_name: mas-control-plane
-    environment:
-      - AGW_CONFIG_PATH=/etc/mas-agw/config.yaml
-    volumes:
-      - ../../control-plane/config-docker.yaml:/etc/mas-agw/config.yaml
-    ports:
-      - "18000:18000"
-    depends_on:
-      redis:
-        condition: service_started
-
-  data-plane:
-    build:
-      context: ../../
-      dockerfile: data-plane/Dockerfile
-    container_name: mas-data-plane
-    environment:
-      - CONTROL_PLANE_URL=http://control-plane:18000
-      - RUST_LOG=debug
-    ports:
-      - "6188:6188"
-      - "6443:6443"
-    depends_on:
-      - control-plane
-      - redis
-      - postgres
-      - mysql
-      - upstream
-
-version: "3.8"
-
-services:
-  # --- Infrastructure ---
-  redis:
-    image: redis:alpine
-    container_name: mas-redis
-    ports:
-      - "6379:6379"
-
-  postgres:
-    image: postgres:alpine
-    container_name: mas-postgres
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: mydb
-    ports:
-      - "5432:5432"
-    # Init script to create table (optional, for now we assume manual or pre-baked)
-    # For demo we can map a simple SQL if needed, but 'users' table is needed.
-    # Let's trust user creates it or we map a volume later.
-    # For now, simplistic.
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  mysql:
     image: mysql:8.0
     container_name: mas-mysql
     environment:
@@ -127,11 +43,10 @@ services:
       retries: 10
 
   upstream:
-    image: python:3.9-slim
+    image: ealen/echo-server:latest
     container_name: mas-upstream
-    command: python3 -m http.server 8000
     ports:
-      - "9000:8000"
+      - "9000:80"
 
   # --- Core Components ---
   control-plane:
@@ -154,7 +69,7 @@ services:
       dockerfile: data-plane/Dockerfile
     container_name: mas-data-plane
     environment:
-      - CONTROL_PLANE_URL=http://control-plane:18000
+      - AGW_CONTROL_PLANE_URL=http://control-plane:18000
       - RUST_LOG=debug
     ports:
       - "6188:6188"

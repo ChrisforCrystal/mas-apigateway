@@ -88,11 +88,27 @@ curl -v -H "X-DB-Type: postgres" http://localhost:6188/db
 
 **MySQL 查询测试**:
 
-```bash
+````bash
 # 指定查 MySQL
 # 预期: Log 中打印 Query Result (如 ["apple"]), Curl 返回页面
 curl -v -H "X-DB-Type: mysql" http://localhost:6188/db
+
+**Deny 插件测试**:
+
+```bash
+# 访问被禁止的路径
+# 预期: HTTP 403 Forbidden
+curl -v http://localhost:6188/new
+````
+
+**HTTPS 测试**:
+
+```bash
+# 预期: HTTPS 握手成功 (忽略证书错误) + 路由响应成功
+curl -v -k https://localhost:6443/secure
 ```
+
+````
 
 ---
 
@@ -107,13 +123,26 @@ curl -v -H "X-DB-Type: mysql" http://localhost:6188/db
    ```bash
    make docker-build
    kind load docker-image masapigateway/control-plane:latest masapigateway/data-plane:latest
-   ```
+   docker pull redis:alpine
+   docker pull postgres:alpine
+   docker pull mysql:8.0
+   docker pull ealen/echo-server:latest
+
+   kind load docker-image \
+   redis:alpine \
+   postgres:alpine \
+   mysql:8.0 \
+   ealen/echo-server:latest
+````
 
 2. **部署资源**:
 
    ```bash
-   # 1. 启动依赖服务 (Redis, DBs) 和配置
+
+
+   # 1. 启动依赖服务 (Redis, DBs, Upstream)
    kubectl apply -f deploy/kubernetes/k8s-deps.yaml
+   kubectl apply -f deploy/kubernetes/upstream.yaml
 
    # 2. 准备测试数据 (Data Seeding)
    # ⚠️ 注意: 需等待 Redis/DB Pod 状态为 Running 后执行
@@ -133,16 +162,29 @@ curl -v -H "X-DB-Type: mysql" http://localhost:6188/db
    # 端口转发 Data Plane 服务到本地
    kubectl port-forward svc/mas-agw-data-plane 6188:80 &
 
-   # 验证 Redis
-   curl -v -H "X-User-ID: k8s_user" http://localhost:6188/redis
 
-   # 验证 Postgres
-   # 预期: Log (kubectl logs) 中打印 ["bob_k8s"]，Curl 返回页面内容
-   curl -v -H "X-DB-Type: postgres" http://localhost:6188/db
+   kubectl port-forward svc/mas-agw-data-plane 6443:443 &
 
-   # 验证 MySQL
-   # 预期: Log (kubectl logs) 中打印 ["banana_k8s"]，Curl 返回页面内容
-   curl -v -H "X-DB-Type: mysql" http://localhost:6188/db
+   # 验证 Redis (动态路由)
+   # 预期: Log (kubectl logs) 中打印 Redis 操作日志，Curl 收到 Echo Server 的 JSON
+   curl -v -H "X-User-ID: k8s_user" http://localhost:6188/redis-crd
+
+   # 验证 Postgres (动态路由)
+   # 预期: Log 中打印 ["bob_k8s"]，Curl 收到 Echo Server 的 JSON
+   curl -v -H "X-DB-Type: postgres" http://localhost:6188/db-crd
+
+   # 验证 MySQL (动态路由)
+   # 预期: Log 中打印 ["banana_k8s"]，Curl 收到 Echo Server 的 JSON
+   curl -v -H "X-DB-Type: mysql" http://localhost:6188/db-crd
+
+   # 验证 Deny 插件 (动态路由)
+   # 预期: HTTP 403 Forbidden
+   curl -v http://localhost:6188/deny-crd
+
+   # 验证 HTTPS (需端口转发 6443)
+   kubectl port-forward svc/mas-agw-data-plane 6443:443 &
+   # 预期: HTTPS 握手成功 (忽略证书错误) + 路由响应成功
+   curl -v -k https://localhost:6443/redis-crd
    ```
 
 ---

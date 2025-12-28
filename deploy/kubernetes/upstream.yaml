@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: upstream
+  labels:
+    app: upstream
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: upstream
+  template:
+    metadata:
+      labels:
+        app: upstream
+    spec:
+      containers:
+        - name: echo-server
+          image: ealen/echo-server:latest
+          ports:
+            - containerPort: 80
+          env:
+            - name: ENABLE_LOGS
+              value: "false"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: upstream
+spec:
+  ports:
+    - port: 80
+      targetPort: 80
+  selector:
+    app: upstream

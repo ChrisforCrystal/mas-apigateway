@@ -61,7 +61,10 @@ func (s *AgwServer) runLoop() {
 	// 获取两个关键的事件通知通道：
 	// 1. registryCh: 监听 K8s 动态资源 (CRD, Secret, Service) 的变更信号
 	// 2. watcherCh:  监听本地静态配置文件 (config.yaml) 的内容变更
-	registryCh := s.registry.Updates()
+	var registryCh <-chan struct{}
+	if s.registry != nil {
+		registryCh = s.registry.Updates()
+	}
 	watcherCh := s.watcher.Updates()
 	
 	// 启动【控制平面主事件循环】(Main Event Loop)
@@ -80,15 +83,20 @@ func (s *AgwServer) runLoop() {
 			s.broadcastMerged()
 
 		// 情况 B: K8s 里的资源变了 (Registry 发出了信号)
-		case <-registryCh:
-			// 仅仅收到了“有变化”的信号，不需要传数据。
-			// 具体的最新数据会在 broadcastMerged 里通过 s.registry.ListXXX() 现场去查。
+		case _, ok := <-registryCh:
+			// 注意：如果 registryCh 为 nil (即 K8s 未启用)，select 会永远忽略这个 case，这是安全的。
+			if !ok {
+				log.Println("Registry channel closed")
+				return
+			}
 			// 触发合并广播
 			s.broadcastMerged()
 		}
 	}
 }
 
+// broadcastMerged 将 "静态配置" 和 "动态 K8s 配置" 合并成一份最终配置，
+// 然后推送给所有连接的数据平面客户端。
 func (s *AgwServer) broadcastMerged() {
 	// 加锁，确保在生成快照的过程中，不会有新的客户端连接进来干扰，保证线程安全
 	s.mu.Lock()
@@ -97,12 +105,20 @@ func (s *AgwServer) broadcastMerged() {
 	// 1. 获取本地静态配置的基底
 	staticCfg := s.staticConfig 
 
+	// 准备 K8s 数据 (如果 Registry 存在)
+	var k8sRoutes []*agwv1.Route
+	var k8sClusters []*agwv1.Cluster
+	if s.registry != nil {
+		k8sRoutes = s.registry.ListRoutes()
+		k8sClusters = s.registry.ListClusters()
+	}
+
 	// 2. 创建一个新的配置快照对象 (Snapshot)，开始【合并】逻辑
 	snapshot := &agwv1.ConfigSnapshot{
 		Listeners: staticCfg.Listeners, // 暂时先引用静态 Listeners (后面会处理 TLS 证书注入)
 		// 【合并路由】：将静态文件的 Routes 和 K8s Registry 里的 CRD Routes 拼接到一起
 		// append(A, B...) 语法将 B 切片打散追加到 A 后面
-		Routes: append(staticCfg.Routes, s.registry.ListRoutes()...),
+		Routes: append(staticCfg.Routes, k8sRoutes...),
 		// 【合并集群】：先放入静态集群 (通常为空或测试用)
 		Clusters: staticCfg.Clusters,
 		// 【合并资源】：Redis 和数据库配置 (直接引用静态配置，因为目前 K8s 侧没有对应 CRD)
@@ -110,7 +126,6 @@ func (s *AgwServer) broadcastMerged() {
 	}
 
 	// 继续追加 K8s 中发现的服务集群 (EndpointSlices 转换而来)
-	k8sClusters := s.registry.ListClusters()
 	snapshot.Clusters = append(snapshot.Clusters, k8sClusters...)
 	
 	// 3. 【注入 TLS 证书】 (Resolve Secrets)
@@ -129,7 +144,13 @@ func (s *AgwServer) broadcastMerged() {
 		// 如果该监听器开启了 TLS 并且指定了 Secret 名字
 		if nl.Tls != nil && nl.Tls.SecretName != "" {
 			// 去 Registry 查找这是不是一个已经缓存的 K8s Secret
-			if secret := s.registry.GetSecret(nl.Tls.SecretName); secret != nil {
+			// 只有当 Registry 启用时才去查找
+			var secret *k8s.TlsSecret
+			if s.registry != nil {
+				secret = s.registry.GetSecret(nl.Tls.SecretName)
+			}
+
+			if secret != nil {
 				// 同样，我们需要深拷贝 TlsConfig，避免修改原始指针指向的对象
 				newTls := *nl.Tls
 				// 【核心动作】：把 K8s Secret 里存的证书内容 (Cert/Key) 填充到配置对象里
@@ -137,7 +158,7 @@ func (s *AgwServer) broadcastMerged() {
 				newTls.KeyPem = secret.Key
 				nl.Tls = &newTls // 指向新的包含了证书内容的 TlsConfig
 			} else {
-				log.Printf("Warning: Secret %s not found for listener %s", nl.Tls.SecretName, nl.Name)
+				log.Printf("Warning: Secret %s not found for listener %s (Registry capable: %v)", nl.Tls.SecretName, nl.Name, s.registry != nil)
 			}
 		}
 		// 将处理好的（可能注入了证书的）Listener 加入新列表
@@ -157,7 +178,7 @@ func (s *AgwServer) broadcastMerged() {
 	// 5. 【广播推送】 (Broadcasting)
 	if len(s.clients) > 0 {
 		log.Printf("Broadcasting merged config version %s (Static Routes: %d, CRD Routes: %d, Static Clusters: %d, K8s Clusters: %d)",
-			version, len(staticCfg.Routes), len(s.registry.ListRoutes()), len(staticCfg.Clusters), len(k8sClusters))
+			version, len(staticCfg.Routes), len(k8sRoutes), len(staticCfg.Clusters), len(k8sClusters))
 
 		// 遍历所有已连接的数据面客户端
 		for _, ch := range s.clients { 
