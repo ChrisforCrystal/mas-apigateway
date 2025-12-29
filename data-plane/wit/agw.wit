@@ -1,0 +1,53 @@
+package mas:agw;
+
+
+// 定义一个 interface 叫 "logging"
+// 原理：这就像定义了一个 Rust Trait 或者是 Go Interface
+interface logging {
+
+    // 定义一个枚举，WIT 会自动把它映射成 Rust enum
+    enum level {
+        debug,
+        info,
+        warn,
+        error
+    }
+     // 定义函数签名。注意这里用的是 string，不是 C 语言的 char* 指针。
+    // WIT 运行时会自动处理 字符串 <-> 内存字节 的转换。
+    log: func(lvl: level, msg: string);
+}
+
+interface redis {
+    /// Execute a Redis command.
+    /// Returns the result as a raw string (for simplicity in this demo) or error.
+    execute: func(addr: string, command: string, args: list<string>) -> result<string, string>;
+}
+
+interface database {
+    enum db-type {
+        mysql,
+        postgres
+    }
+    
+    /// Execute a SQL query.
+    /// Returns a JSON string representing the rows, or an error message.
+    query: func(db-type: db-type, connection: string, sql: string) -> result<string, string>;
+}
+
+// 1. 可以使用(import) logging/redis/database 这些能力
+// 2. 必须提供(export) handle-request 这个函数给外面调
+world plugin {
+    // 【 进口 (Import) = 别人给我的能力 】
+    // 网关 (Host) 是甲方，它提供这些能力。
+    // 插件 (Guest) 是乙方，它直接用这些能力。
+    // 比如：插件想打印日志，必须得调网关给的 logging 接口，插件自己没法直接写 stdout。
+    import logging;
+    import redis;
+    import database;
+
+    // 【 出口 (Export) = 我提供给别人的能力 】
+    // 插件 (Guest) 是甲方，它必须实现这个函数。
+    // 网关 (Host) 是乙方，网关会在收到 HTTP 请求时，反过来调用插件的这个函数。
+    // list<tuple<string, string>> 对应 Rust 的 Vec<(String, String)>
+    export handle-request: func(req-headers: list<tuple<string, string>>) -> bool;
+}

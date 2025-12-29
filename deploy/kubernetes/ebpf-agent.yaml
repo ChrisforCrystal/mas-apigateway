@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: mas-ebpf-agent
+  namespace: default
+  labels:
+    app: mas-ebpf-agent
+spec:
+  selector:
+    matchLabels:
+      app: mas-ebpf-agent
+  template:
+    metadata:
+      labels:
+        app: mas-ebpf-agent
+    spec:
+      hostNetwork: true
+      hostPID: true
+      containers:
+        - name: agent
+          image: mas-ebpf-agent:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["BPF", "PERFMON", "SYS_RESOURCE", "NET_ADMIN"]
+          args:
+            - "--cgroup"
+            - "/sys/fs/cgroup"
+          volumeMounts:
+            - name: cgroup
+              mountPath: /sys/fs/cgroup
+            - name: bpffs
+              mountPath: /sys/fs/bpf
+      volumes:
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+            type: Directory
+        - name: bpffs
+          hostPath:
+            path: /sys/fs/bpf
+            type: Directory

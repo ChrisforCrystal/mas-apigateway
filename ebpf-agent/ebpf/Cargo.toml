@@ -1,0 +1,13 @@
+[package]
+name = "ebpf-agent-ebpf"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aya-ebpf = "0.1.0"
+aya-log-ebpf = "0.1.0"
+ebpf-agent-common = { path = "../common" }
+
+[[bin]]
+name = "ebpf-agent"
+path = "src/main.rs"

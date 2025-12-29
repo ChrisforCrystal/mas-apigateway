@@ -1,82 +1,66 @@
-use std::collections::HashMap;
+use wit_bindgen::generate;
 
-#[link(wasm_import_module = "env")]
-extern "C" {
-    fn agw_get_header(
-        name_ptr: *const u8,
-        name_len: usize,
-        value_ptr: *mut u8,
-        value_max_len: usize,
-    ) -> i32;
+generate!({
+    path: "../../data-plane/wit/agw.wit",
+    world: "plugin",
+});
 
-    fn agw_redis_command(
-        name_ptr: *const u8,
-        name_len: usize,
-        cmd_ptr: *const u8,
-        cmd_len: usize,
-        out_ptr: *mut u8,
-        out_max: usize,
-    ) -> i32;
-}
+struct Plugin;
 
-#[no_mangle]
-pub fn on_request() -> i32 {
-    // 1. Get Header "X-User-ID"
-    let user_id = get_header("x-user-id");
-    if user_id.is_empty() {
-        return 0; // Allow if no user id
-    }
+impl Guest for Plugin {
+    fn handle_request(req_headers: Vec<(String, String)>) -> bool {
+        // 【调用 Host 能力】
+        // 下面这行代码，表面看是普通函数调用，
+        // 实际上 WIT 会把它编译成 wait 指令，让 Host 去执行上面第二步里的代码。
+        let user_id = req_headers
+            .iter()
+            .find(|(k, _)| k.to_lowercase() == "x-user-id")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default();
 
-    // 2. Call Redis: INCR user_id
-    // Command: ["INCR", user_id]
-    // JSON: ["INCR", "123"]
-    let cmd_json = format!("[\"INCR\", \"{}\"]", user_id);
-    let redis_name = "default"; // Assume configured name is "default"
+        if user_id.is_empty() {
+            return true; // Allow
+        }
 
-    // [触发点]
-    // 这一行调用会穿透到 Host (wasm.rs)
-    // -> agw_redis_command
-    // -> mem.read() 读取参数
-    // -> redis::cmd(&args[0]) [对应 wasm.rs:188!]
-    let result = redis_command(redis_name, &cmd_json);
+        // 2. Call Redis: INCR user_id
+        // Using generated bindings! No unsafe pointers!
+        // mas::agw::redis::execute(addr, cmd, args)
+        let redis_name = "default";
 
-    // 3. Check limit (e.g. > 5)
-    if let Ok(count_str) = result {
-        if let Ok(count) = count_str.trim().parse::<i32>() {
-            if count > 5 {
-                return 1; // Deny
+        // Redis command args: ["INCR", user_id]
+        // Note: The interface defines 'command' as the verb, and 'args' as list<string>
+        let cmd_verb = "INCR";
+        let cmd_args = vec![user_id];
+
+        let result = mas::agw::redis::execute(redis_name, cmd_verb, &cmd_args);
+
+        // 3. Check limit
+        match result {
+            Ok(Ok(count_str)) => {
+                if let Ok(count) = count_str.trim().parse::<i32>() {
+                    if count > 5 {
+                        return false; // Deny
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                // Log error using WIT logging interface
+                mas::agw::logging::log(
+                    mas::agw::logging::Level::Error,
+                    &format!("Redis error: {}", e),
+                );
+            }
+            Err(e) => {
+                // Transport/Runtime error
+                mas::agw::logging::log(
+                    mas::agw::logging::Level::Error,
+                    &format!("Host call error: {}", e),
+                );
             }
         }
-    }
 
-    0 // Allow
-}
-
-fn get_header(name: &str) -> String {
-    let mut buf = [0u8; 128];
-    let len = unsafe { agw_get_header(name.as_ptr(), name.len(), buf.as_mut_ptr(), buf.len()) };
-    if len > 0 {
-        String::from_utf8_lossy(&buf[..len as usize]).to_string()
-    } else {
-        String::new()
+        true // Allow by default if not denied above
     }
 }
 
-fn redis_command(name: &str, cmd_json: &str) -> Result<String, String> {
-    let mut buf = [0u8; 1024];
-    let len = unsafe {
-        agw_redis_command(
-            name.as_ptr(),
-            name.len(),
-            cmd_json.as_ptr(),
-            cmd_json.len(),
-            buf.as_mut_ptr(),
-            buf.len(),
-        )
-    };
-    if len >= 0 {
-        Ok(String::from_utf8_lossy(&buf[..len as usize]).to_string())
-    } else {
-        Err(format!("Error code: {}", len))
-    }
-}
+export!(Plugin);

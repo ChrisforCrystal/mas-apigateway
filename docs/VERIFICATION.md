@@ -103,10 +103,87 @@ curl -v http://localhost:6188/new
 
 **HTTPS 测试**:
 
+---
+
+## 场景三：WIT 插件 & eBPF 加速验证 (Phase 8 & 9)
+
+### 1. WIT 插件编译与验证
+
+使用 `cargo-component` 编译新版插件：
+
 ```bash
-# 预期: HTTPS 握手成功 (忽略证书错误) + 路由响应成功
-curl -v -k https://localhost:6443/secure
+# 安装工具
+cargo install cargo-component
+
+# 编译 Redis Demo
+cd plugins/redis-demo
+cargo component build --release
+cp target/wasm32-wasi/release/redis_demo.wasm ../../deploy/docker/plugins/
+
+# 验证
+# 启动 Data Plane 后，访问 /redis-crd，观察 stdout 日志。
+# 成功标志：日志中不再出现 "unsafe" 字样，且能正确打印 Redis 返回值。
 ```
+
+### 2. eBPF Sidecar 加速验证
+
+需要 Linux 环境（Docker 或 VM）且具有 Privileged 权限。
+
+**编译 eBPF Agent**:
+
+```bash
+cargo install bpf-linker
+cd ebpf-agent
+# 编译内核态程序
+cargo build --release --pkgs ebpf-agent-ebpf --target=bpfel-unknown-none -Z build-std=core
+# 编译用户态 Agent
+cargo build --release --pkgs agent
+```
+
+**运行与测试**:
+
+````bash
+# 1. 运行 Agent (需 root)
+sudo ./target/release/ebpf-agent --cgroup /sys/fs/cgroup/unified
+
+# 2. 启动网关和应用
+docker-compose up -d
+
+### 3. K8s 下的 eBPF 验证
+在 K8s 中，我们使用 DaemonSet 部署 Agent，自动加速节点上的所有 Pod 通信。
+
+1. **构建并加载镜像 (Kind)**:
+   ```bash
+   # 在项目根目录
+   docker build -t mas-ebpf-agent:latest -f ebpf-agent/Dockerfile .
+   kind load docker-image mas-ebpf-agent:latest --name mas-cluster
+````
+
+2. **部署 Agent**:
+
+   ```bash
+   kubectl apply -f deploy/kubernetes/ebpf-agent.yaml
+   ```
+
+3. **验证**:
+
+   ```bash
+   # 查看 Agent 日志
+   kubectl logs -l app=mas-ebpf-agent -f
+
+   # 预期: 能够看到 "Attached sock_ops to cgroup" 和 "Socket established" 日志，
+   # 表明它正在监控集群内的连接建立。
+   ```
+
+---
+
+### 4. 压测 (对比开启 Agent 前后)
+
+# 使用 wrk 或 ab 压测网关接口
+
+wrk -t4 -c100 -d30s http://localhost:6188/redis-crd
+
+# 预期: 开启 Agent 后，Loopback 流量被 Sockmap 短路，吞吐量应有明显提升 (10%-20%)，且 CPU 系统态占用(sys) 降低。
 
 ````
 
