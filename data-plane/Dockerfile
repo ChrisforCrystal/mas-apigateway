@@ -12,6 +12,7 @@ COPY proto /usr/src/app/proto
 # Optimization: Cache dependencies
 WORKDIR /usr/src/app/data-plane
 COPY data-plane/Cargo.toml data-plane/build.rs ./
+COPY data-plane/wit ./wit
 RUN mkdir src && echo "fn main() {}" > src/main.rs
 RUN cargo build --release
 

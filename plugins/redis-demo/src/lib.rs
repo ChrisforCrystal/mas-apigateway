@@ -36,25 +36,18 @@ impl Guest for Plugin {
 
         // 3. Check limit
         match result {
-            Ok(Ok(count_str)) => {
+            Ok(count_str) => {
                 if let Ok(count) = count_str.trim().parse::<i32>() {
                     if count > 5 {
                         return false; // Deny
                     }
                 }
             }
-            Ok(Err(e)) => {
-                // Log error using WIT logging interface
+            Err(e) => {
+                // Log error
                 mas::agw::logging::log(
                     mas::agw::logging::Level::Error,
                     &format!("Redis error: {}", e),
-                );
-            }
-            Err(e) => {
-                // Transport/Runtime error
-                mas::agw::logging::log(
-                    mas::agw::logging::Level::Error,
-                    &format!("Host call error: {}", e),
                 );
             }
         }

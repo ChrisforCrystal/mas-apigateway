@@ -80,3 +80,17 @@ services:
       - postgres
       - mysql
       - upstream
+
+  ebpf-agent:
+    build:
+      context: ../../
+      dockerfile: ebpf-agent/Dockerfile
+    container_name: mas-ebpf-agent
+    privileged: true
+    pid: host
+    network_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - /sys/fs/bpf:/sys/fs/bpf:rw
+    environment:
+      - RUST_LOG=info

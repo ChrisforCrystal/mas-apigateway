@@ -5,3 +5,8 @@ edition = "2024"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"], default-features = false }
+aya = { version = "0.13", default-features = false, optional = true }
+
+[features]
+default = []
+user = ["dep:aya"]

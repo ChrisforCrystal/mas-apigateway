@@ -32,23 +32,17 @@ impl Guest for Plugin {
         let result = mas::agw::database::query(db_enum, conn_name, sql);
 
         match result {
-            Ok(Ok(json)) => {
+            Ok(json) => {
                 // Log the result
                 mas::agw::logging::log(
                     mas::agw::logging::Level::Debug,
                     &format!("DB Query Result: {}", json),
                 );
             }
-            Ok(Err(e)) => {
-                mas::agw::logging::log(
-                    mas::agw::logging::Level::Error,
-                    &format!("DB Error: {}", e),
-                );
-            }
             Err(e) => {
                 mas::agw::logging::log(
                     mas::agw::logging::Level::Error,
-                    &format!("Host Call Error: {}", e),
+                    &format!("DB Error: {}", e),
                 );
             }
         }
